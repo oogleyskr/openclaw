@@ -20,13 +20,19 @@ export type InfrastructureSnapshot = {
   collectedAt: number;
 };
 
+// Polling timers for each subsystem. `.unref()` prevents them from keeping
+// the Node process alive when the gateway is shutting down.
 let gpuInterval: ReturnType<typeof setInterval> | null = null;
 let tunnelInterval: ReturnType<typeof setInterval> | null = null;
 let providerInterval: ReturnType<typeof setInterval> | null = null;
 
+// Cached results from the most recent polling cycle. The gateway's RPC
+// handler reads these via getInfrastructureSnapshot() without triggering
+// new probes, so dashboard clients get fast responses.
 let cachedGpu: GpuMetricsSnapshot | null = null;
 let cachedTunnels: TunnelMonitorResult[] | null = null;
 
+/** Refresh GPU metrics from local or remote nvidia-smi and cache the result. */
 async function refreshGpuMetrics(infraCfg: InfrastructureConfig): Promise<void> {
   const gpuCfg = infraCfg.gpu;
   if (!gpuCfg?.enabled) {
@@ -45,6 +51,7 @@ async function refreshGpuMetrics(infraCfg: InfrastructureConfig): Promise<void> 
   }
 }
 
+/** Check all configured tunnels in parallel and cache the results. */
 async function refreshTunnels(infraCfg: InfrastructureConfig): Promise<void> {
   const tunnelConfigs = infraCfg.tunnels;
   if (!tunnelConfigs || tunnelConfigs.length === 0) {
@@ -100,6 +107,7 @@ export async function probeInfrastructure(cfg: OpenClawConfig): Promise<Infrastr
     }
   }
 
+  // allSettled so one failing subsystem doesn't block the others.
   await Promise.allSettled(tasks);
 
   return getInfrastructureSnapshot();
