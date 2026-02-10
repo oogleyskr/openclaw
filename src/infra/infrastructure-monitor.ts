@@ -56,6 +56,15 @@ async function refreshGpuMetrics(infraCfg: InfrastructureConfig): Promise<void> 
   } else {
     cachedGpu = await collectLocalGpuMetrics();
   }
+
+  // Apply configured power limit override for GPUs that report [N/A]
+  if (gpuCfg.powerLimitWatts != null && cachedGpu) {
+    for (const gpu of cachedGpu.gpus) {
+      if (gpu.powerLimitWatts == null) {
+        gpu.powerLimitWatts = gpuCfg.powerLimitWatts;
+      }
+    }
+  }
 }
 
 /** Refresh local GPU metrics via nvidia-smi and cache the result. */

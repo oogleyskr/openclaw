@@ -542,6 +542,7 @@ export const OpenClawSchema = z
             sshKeyPath: z.string().optional(),
             sshPort: z.number().int().min(1).max(65535).optional(),
             intervalSeconds: z.number().int().positive().optional(),
+            powerLimitWatts: z.number().positive().optional(),
           })
           .strict()
           .optional(),

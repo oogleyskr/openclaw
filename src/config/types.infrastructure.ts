@@ -26,6 +26,8 @@ export type GpuMetricsConfig = {
   sshPort?: number;
   /** How often to collect metrics in seconds (default: 30). */
   intervalSeconds?: number;
+  /** Override power limit in watts when nvidia-smi reports [N/A]. */
+  powerLimitWatts?: number;
 };
 
 export type LocalGpuConfig = {
