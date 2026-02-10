@@ -1,4 +1,4 @@
-import type { OpenClawApp } from "./app.ts";
+import type { BillBotApp } from "./app.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadHardware } from "./controllers/hardware.ts";
 import { loadLogs } from "./controllers/logs.ts";
@@ -17,7 +17,7 @@ export function startNodesPolling(host: PollingHost) {
     return;
   }
   host.nodesPollInterval = window.setInterval(
-    () => void loadNodes(host as unknown as OpenClawApp, { quiet: true }),
+    () => void loadNodes(host as unknown as BillBotApp, { quiet: true }),
     5000,
   );
 }
@@ -38,7 +38,7 @@ export function startLogsPolling(host: PollingHost) {
     if (host.tab !== "logs") {
       return;
     }
-    void loadLogs(host as unknown as OpenClawApp, { quiet: true });
+    void loadLogs(host as unknown as BillBotApp, { quiet: true });
   }, 2000);
 }
 
@@ -58,7 +58,7 @@ export function startDebugPolling(host: PollingHost) {
     if (host.tab !== "debug") {
       return;
     }
-    void loadDebug(host as unknown as OpenClawApp);
+    void loadDebug(host as unknown as BillBotApp);
   }, 3000);
 }
 
@@ -78,7 +78,7 @@ export function startHardwarePolling(host: PollingHost) {
     if (host.tab !== "hardware") {
       return;
     }
-    void loadHardware(host as unknown as OpenClawApp);
+    void loadHardware(host as unknown as BillBotApp);
   }, 10_000);
 }
 

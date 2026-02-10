@@ -1,18 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OpenClawApp } from "./app.ts";
+import { BillBotApp } from "./app.ts";
 
 // oxlint-disable-next-line typescript/unbound-method
-const originalConnect = OpenClawApp.prototype.connect;
+const originalConnect = BillBotApp.prototype.connect;
 
 function mountApp(pathname: string) {
   window.history.replaceState({}, "", pathname);
-  const app = document.createElement("openclaw-app") as OpenClawApp;
+  const app = document.createElement("billbot-app") as BillBotApp;
   document.body.append(app);
   return app;
 }
 
 beforeEach(() => {
-  OpenClawApp.prototype.connect = () => {
+  BillBotApp.prototype.connect = () => {
     // no-op: avoid real gateway WS connections in browser tests
   };
   window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
@@ -21,7 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  OpenClawApp.prototype.connect = originalConnect;
+  BillBotApp.prototype.connect = originalConnect;
   window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
   localStorage.clear();
   document.body.innerHTML = "";

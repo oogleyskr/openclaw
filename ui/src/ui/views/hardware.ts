@@ -118,7 +118,7 @@ function renderGpuCard(title: string, gpu: GpuMetricsSnapshot | undefined) {
       <div style="margin-top: 12px;">
         ${progressBar(g.utilizationPercent ?? 0, 100, "GPU Utilization")}
         ${progressBar(g.memoryUsedMB ?? 0, g.memoryTotalMB ?? 1, `VRAM ${g.memoryUsedMB ?? 0} / ${g.memoryTotalMB ?? 0} MB`)}
-        ${g.powerDrawWatts != null && g.powerLimitWatts != null ? progressBar(g.powerDrawWatts, g.powerLimitWatts, `Power ${g.powerDrawWatts.toFixed(0)} / ${g.powerLimitWatts.toFixed(0)} W`) : nothing}
+        ${g.powerDrawWatts != null && g.powerLimitWatts != null ? progressBar(g.powerDrawWatts, g.powerLimitWatts, `Power ${g.powerDrawWatts.toFixed(0)} / ${g.powerLimitWatts.toFixed(0)} W`) : g.powerDrawWatts != null ? metric("Power Draw", `${g.powerDrawWatts.toFixed(0)}`, " W") : nothing}
         ${metric("Temperature", g.temperatureCelsius, "\u00b0C")}
       </div>
       <div class="muted" style="font-size: 0.8em; margin-top: 8px;">
