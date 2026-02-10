@@ -205,20 +205,25 @@ export function handleMessageEnd(
   const assistantMessage = msg;
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
 
+  promoteThinkingTagsToBlocks(assistantMessage);
+
+  const rawText = extractAssistantText(assistantMessage);
+
   // Calculate and record tok/s for the Hardware tab.
   if (ctx.state.assistantMessageStartedAt) {
     const durationMs = Date.now() - ctx.state.assistantMessageStartedAt;
     const usage = normalizeUsage((assistantMessage as { usage?: unknown }).usage as never);
-    const outputTokens = usage?.output ?? 0;
-    if (outputTokens > 0 && durationMs > 0) {
+    let outputTokens = usage?.output ?? 0;
+    // Fallback: estimate tokens from text (~4 chars per token) when provider
+    // doesn't return usage data (e.g. llama.cpp streaming).
+    if (outputTokens === 0 && rawText.length > 0) {
+      outputTokens = Math.max(1, Math.round(rawText.length / 4));
+    }
+    if (outputTokens > 0 && durationMs > 100) {
       recordInference(outputTokens, durationMs);
     }
     ctx.state.assistantMessageStartedAt = undefined;
   }
-
-  promoteThinkingTagsToBlocks(assistantMessage);
-
-  const rawText = extractAssistantText(assistantMessage);
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",

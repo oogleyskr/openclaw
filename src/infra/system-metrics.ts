@@ -1,4 +1,9 @@
+import { exec, execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { promisify } from "node:util";
+
+const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export type SystemMetricsSnapshot = {
   cpuUsagePercent?: number;
@@ -90,12 +95,16 @@ function parseProcNetDev(content: string): { rxBytes: number; txBytes: number } 
   return { rxBytes, txBytes };
 }
 
+// Separate prev values for remote host delta calculations
+let prevRemoteNetRxBytes = 0;
+let prevRemoteNetTxBytes = 0;
+let prevRemoteNetTimestamp = 0;
+
 /**
  * Read CPU temperature from thermal zones.
  */
 async function readCpuTemperature(): Promise<number | undefined> {
   try {
-    // Try thermal_zone0 first (most common for CPU)
     const temp = await readFile("/sys/class/thermal/thermal_zone0/temp", "utf-8");
     const milliC = parseInt(temp.trim(), 10);
     if (Number.isFinite(milliC)) {
@@ -106,15 +115,9 @@ async function readCpuTemperature(): Promise<number | undefined> {
   }
 
   try {
-    // Fallback: try sensors command
-    const { exec } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execAsync = promisify(exec);
     const { stdout } = await execAsync(
       "sensors 2>/dev/null | grep -i 'Package\\|Tctl\\|CPU' | head -1",
-      {
-        timeout: 3000,
-      },
+      { timeout: 3000 },
     );
     const match = stdout.match(/\+(\d+(?:\.\d+)?)/);
     if (match) {
@@ -188,6 +191,71 @@ export async function collectSystemMetrics(): Promise<SystemMetricsSnapshot> {
       ramUsedMB: usedMB,
       ramTotalMB: totalMB,
       ramUsagePercent,
+      networkInKBps,
+      networkOutKBps,
+      collectedAt: now,
+    };
+  } catch (err) {
+    return {
+      collectedAt: now,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Collect network metrics from a remote host via SSH.
+ * Reads /proc/net/dev for network throughput.
+ */
+export async function collectRemoteSystemMetrics(params: {
+  sshHost: string;
+  sshUser?: string;
+  sshKeyPath?: string;
+  sshPort?: number;
+}): Promise<SystemMetricsSnapshot> {
+  const now = Date.now();
+  const userHost = params.sshUser ? `${params.sshUser}@${params.sshHost}` : params.sshHost;
+
+  const baseSshArgs: string[] = [
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "BatchMode=yes",
+  ];
+  if (params.sshKeyPath) {
+    baseSshArgs.push("-i", params.sshKeyPath);
+  }
+  if (params.sshPort) {
+    baseSshArgs.push("-p", String(params.sshPort));
+  }
+
+  try {
+    const sshArgs = [...baseSshArgs, userHost, "cat /proc/net/dev"];
+    const { stdout } = await execFileAsync("ssh", sshArgs, { timeout: 10_000 });
+
+    const { rxBytes, txBytes } = parseProcNetDev(stdout);
+    let networkInKBps: number | undefined;
+    let networkOutKBps: number | undefined;
+    if (prevRemoteNetTimestamp > 0) {
+      const elapsed = (now - prevRemoteNetTimestamp) / 1000;
+      if (elapsed > 0) {
+        networkInKBps = Math.round((rxBytes - prevRemoteNetRxBytes) / 1024 / elapsed);
+        networkOutKBps = Math.round((txBytes - prevRemoteNetTxBytes) / 1024 / elapsed);
+        if (networkInKBps < 0) {
+          networkInKBps = 0;
+        }
+        if (networkOutKBps < 0) {
+          networkOutKBps = 0;
+        }
+      }
+    }
+    prevRemoteNetRxBytes = rxBytes;
+    prevRemoteNetTxBytes = txBytes;
+    prevRemoteNetTimestamp = now;
+
+    return {
       networkInKBps,
       networkOutKBps,
       collectedAt: now,

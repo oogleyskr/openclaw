@@ -74,6 +74,23 @@ function formatAge(ms: number) {
   return `${hours}h ago`;
 }
 
+function cToF(celsius: number | undefined): number | undefined {
+  if (celsius == null) {
+    return undefined;
+  }
+  return Math.round((celsius * 9) / 5 + 32);
+}
+
+function formatKBps(kbps: number | undefined): string {
+  if (kbps == null) {
+    return "n/a";
+  }
+  if (kbps >= 1024) {
+    return `${(kbps / 1024).toFixed(1)} MB/s`;
+  }
+  return `${kbps} KB/s`;
+}
+
 function gpuStatus(gpu: GpuMetricsSnapshot): "ok" | "degraded" | "error" {
   if (gpu.error || gpu.gpus.length === 0) {
     return "error";
@@ -85,16 +102,16 @@ function gpuStatus(gpu: GpuMetricsSnapshot): "ok" | "degraded" | "error" {
   return "ok";
 }
 
-function renderGpuCard(
-  title: string,
+function renderDgxSparkCard(
   gpu: GpuMetricsSnapshot | undefined,
   speed?: InferenceSpeedSnapshot,
+  remoteNet?: SystemMetricsSnapshot,
 ) {
   if (!gpu) {
     return html`
       <div class="card">
-        <div class="card-title">${title}</div>
-        <div class="muted" style="margin-top: 8px;">No data available.</div>
+        <div class="card-title">DGX Spark GPU</div>
+        <div class="muted" style="margin-top: 8px">No data available.</div>
       </div>
     `;
   }
@@ -106,7 +123,7 @@ function renderGpuCard(
     return html`
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div class="card-title">${title}</div>
+          <div class="card-title">DGX Spark GPU</div>
           ${statusChip("error")}
         </div>
         <div class="muted" style="margin-top: 8px;">${gpu.error ?? "No GPU detected."}</div>
@@ -117,7 +134,7 @@ function renderGpuCard(
   return html`
     <div class="card">
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <div class="card-title">${title}</div>
+        <div class="card-title">DGX Spark GPU</div>
         ${statusChip(status)}
       </div>
       <div class="card-sub">${g.name} (${gpu.host})</div>
@@ -125,11 +142,60 @@ function renderGpuCard(
         ${progressBar(g.utilizationPercent ?? 0, 100, "GPU Utilization")}
         ${progressBar(g.memoryUsedMB ?? 0, g.memoryTotalMB ?? 1, `VRAM ${g.memoryUsedMB ?? 0} / ${g.memoryTotalMB ?? 0} MB`)}
         ${g.powerDrawWatts != null && g.powerLimitWatts != null ? progressBar(g.powerDrawWatts, g.powerLimitWatts, `Power ${g.powerDrawWatts.toFixed(0)} / ${g.powerLimitWatts.toFixed(0)} W`) : g.powerDrawWatts != null ? metric("Power Draw", `${g.powerDrawWatts.toFixed(0)}`, " W") : nothing}
-        ${metric("Temperature", g.temperatureCelsius, "\u00b0C")}
+        ${metric("Temperature", cToF(g.temperatureCelsius), "\u00b0F")}
         ${speed ? metric("Speed", `${speed.tokensPerSecond} tok/s (avg ${speed.averageTokPerSec})`) : nothing}
+        ${remoteNet?.networkInKBps != null ? metric("Net In", formatKBps(remoteNet.networkInKBps)) : nothing}
+        ${remoteNet?.networkOutKBps != null ? metric("Net Out", formatKBps(remoteNet.networkOutKBps)) : nothing}
       </div>
       <div class="muted" style="font-size: 0.8em; margin-top: 8px;">
         Collected ${formatAge(Date.now() - gpu.collectedAt)}
+      </div>
+    </div>
+  `;
+}
+
+function renderLocalSystemCard(
+  gpu: GpuMetricsSnapshot | undefined,
+  sys: SystemMetricsSnapshot | undefined,
+) {
+  const hasGpu = gpu && gpu.gpus.length > 0 && !gpu.error;
+  const hasSys = sys && !sys.error;
+
+  if (!hasGpu && !hasSys) {
+    return html`
+      <div class="card">
+        <div class="card-title">Local System</div>
+        <div class="muted" style="margin-top: 8px">No data available.</div>
+      </div>
+    `;
+  }
+
+  const g = gpu?.gpus[0];
+  const gpuOk = hasGpu ? gpuStatus(gpu!) : "unknown";
+  const cpuHigh = (sys?.cpuUsagePercent ?? 0) > 90;
+  const overallStatus: "ok" | "degraded" | "error" =
+    gpuOk === "error" || sys?.error ? "error" : gpuOk === "degraded" || cpuHigh ? "degraded" : "ok";
+
+  return html`
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="card-title">Local System</div>
+        ${statusChip(overallStatus)}
+      </div>
+      ${g ? html`<div class="card-sub">${g.name} (${gpu!.host})</div>` : nothing}
+      <div style="margin-top: 12px;">
+        ${hasSys && sys!.cpuUsagePercent != null ? progressBar(sys!.cpuUsagePercent, 100, "CPU Usage") : nothing}
+        ${hasSys && sys!.cpuTemperatureCelsius != null ? metric("CPU Temp", cToF(sys!.cpuTemperatureCelsius), "\u00b0F") : nothing}
+        ${hasSys && sys!.ramUsedMB != null && sys!.ramTotalMB != null ? progressBar(sys!.ramUsedMB, sys!.ramTotalMB, `RAM ${Math.round((sys!.ramUsedMB / 1024) * 10) / 10} / ${Math.round((sys!.ramTotalMB / 1024) * 10) / 10} GB`) : nothing}
+        ${g ? progressBar(g.utilizationPercent ?? 0, 100, "GPU Utilization") : nothing}
+        ${g ? progressBar(g.memoryUsedMB ?? 0, g.memoryTotalMB ?? 1, `VRAM ${g.memoryUsedMB ?? 0} / ${g.memoryTotalMB ?? 0} MB`) : nothing}
+        ${g?.powerDrawWatts != null && g?.powerLimitWatts != null ? progressBar(g.powerDrawWatts, g.powerLimitWatts, `Power ${g.powerDrawWatts.toFixed(0)} / ${g.powerLimitWatts.toFixed(0)} W`) : g?.powerDrawWatts != null ? metric("Power Draw", `${g.powerDrawWatts.toFixed(0)}`, " W") : nothing}
+        ${g ? metric("GPU Temp", cToF(g.temperatureCelsius), "\u00b0F") : nothing}
+        ${hasSys ? metric("Net In", formatKBps(sys!.networkInKBps)) : nothing}
+        ${hasSys ? metric("Net Out", formatKBps(sys!.networkOutKBps)) : nothing}
+      </div>
+      <div class="muted" style="font-size: 0.8em; margin-top: 8px;">
+        Collected ${formatAge(Date.now() - (gpu?.collectedAt ?? sys?.collectedAt ?? Date.now()))}
       </div>
     </div>
   `;
@@ -304,47 +370,6 @@ function renderMultimodalCard(infra: InfrastructureData) {
   `;
 }
 
-function formatKBps(kbps: number | undefined): string {
-  if (kbps == null) {
-    return "n/a";
-  }
-  if (kbps >= 1024) {
-    return `${(kbps / 1024).toFixed(1)} MB/s`;
-  }
-  return `${kbps} KB/s`;
-}
-
-function renderSystemMetricsCard(sys: SystemMetricsSnapshot | undefined) {
-  if (!sys) {
-    return nothing;
-  }
-
-  const cpuStatus: "ok" | "degraded" | "error" = sys.error
-    ? "error"
-    : (sys.cpuUsagePercent ?? 0) > 90
-      ? "degraded"
-      : "ok";
-
-  return html`
-    <div class="card">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <div class="card-title">System</div>
-        ${statusChip(cpuStatus)}
-      </div>
-      <div style="margin-top: 12px;">
-        ${sys.cpuUsagePercent != null ? progressBar(sys.cpuUsagePercent, 100, "CPU Usage") : metric("CPU Usage", undefined)}
-        ${sys.cpuTemperatureCelsius != null ? metric("CPU Temp", sys.cpuTemperatureCelsius, "\u00b0C") : nothing}
-        ${sys.ramUsedMB != null && sys.ramTotalMB != null ? progressBar(sys.ramUsedMB, sys.ramTotalMB, `RAM ${Math.round((sys.ramUsedMB / 1024) * 10) / 10} / ${Math.round((sys.ramTotalMB / 1024) * 10) / 10} GB`) : metric("RAM", undefined)}
-        ${metric("Net In", formatKBps(sys.networkInKBps))}
-        ${metric("Net Out", formatKBps(sys.networkOutKBps))}
-      </div>
-      <div class="muted" style="font-size: 0.8em; margin-top: 8px;">
-        Collected ${formatAge(Date.now() - sys.collectedAt)}
-      </div>
-    </div>
-  `;
-}
-
 export function renderHardware(props: HardwareProps) {
   return html`
     <section>
@@ -368,9 +393,8 @@ export function renderHardware(props: HardwareProps) {
         props.infra
           ? html`
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px;">
-          ${renderSystemMetricsCard(props.infra.systemMetrics)}
-          ${renderGpuCard("DGX Spark GPU", props.infra.gpu, props.infra.inferenceSpeed)}
-          ${renderGpuCard("Local GPU", props.infra.localGpu)}
+          ${renderDgxSparkCard(props.infra.gpu, props.infra.inferenceSpeed, props.infra.remoteSystemMetrics)}
+          ${renderLocalSystemCard(props.infra.localGpu, props.infra.systemMetrics)}
           ${renderProviderCard(props.infra)}
           ${renderGatewayCard(props.health)}
           ${renderTunnelCard(props.infra.tunnels)}

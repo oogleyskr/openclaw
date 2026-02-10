@@ -13,7 +13,11 @@ import {
   getProviderHealthSnapshot,
   stopProviderHealthMonitor,
 } from "./provider-health.js";
-import { type SystemMetricsSnapshot, collectSystemMetrics } from "./system-metrics.js";
+import {
+  type SystemMetricsSnapshot,
+  collectSystemMetrics,
+  collectRemoteSystemMetrics,
+} from "./system-metrics.js";
 import { type TunnelMonitorResult, checkTunnelHealth } from "./tunnel-monitor.js";
 
 export type InfrastructureSnapshot = {
@@ -23,6 +27,7 @@ export type InfrastructureSnapshot = {
   localGpu?: GpuMetricsSnapshot;
   multimodal?: MultimodalHealthSnapshot;
   systemMetrics?: SystemMetricsSnapshot;
+  remoteSystemMetrics?: SystemMetricsSnapshot;
   inferenceSpeed?: InferenceSpeedSnapshot;
   collectedAt: number;
 };
@@ -44,6 +49,7 @@ let cachedLocalGpu: GpuMetricsSnapshot | null = null;
 let cachedTunnels: TunnelMonitorResult[] | null = null;
 let cachedMultimodal: MultimodalHealthSnapshot | null = null;
 let cachedSystemMetrics: SystemMetricsSnapshot | null = null;
+let cachedRemoteSystemMetrics: SystemMetricsSnapshot | null = null;
 
 /** Refresh GPU metrics from local or remote nvidia-smi and cache the result. */
 async function refreshGpuMetrics(infraCfg: InfrastructureConfig): Promise<void> {
@@ -92,6 +98,20 @@ async function refreshSystemMetrics(): Promise<void> {
   cachedSystemMetrics = await collectSystemMetrics();
 }
 
+/** Collect remote system metrics (network) via SSH and cache the result. */
+async function refreshRemoteSystemMetrics(infraCfg: InfrastructureConfig): Promise<void> {
+  const gpuCfg = infraCfg.gpu;
+  if (!gpuCfg?.sshHost) {
+    return;
+  }
+  cachedRemoteSystemMetrics = await collectRemoteSystemMetrics({
+    sshHost: gpuCfg.sshHost,
+    sshUser: gpuCfg.sshUser,
+    sshKeyPath: gpuCfg.sshKeyPath,
+    sshPort: gpuCfg.sshPort,
+  });
+}
+
 /** Check all configured tunnels in parallel and cache the results. */
 async function refreshTunnels(infraCfg: InfrastructureConfig): Promise<void> {
   const tunnelConfigs = infraCfg.tunnels;
@@ -124,6 +144,7 @@ export function getInfrastructureSnapshot(): InfrastructureSnapshot {
     localGpu: cachedLocalGpu ?? undefined,
     multimodal: cachedMultimodal ?? undefined,
     systemMetrics: cachedSystemMetrics ?? undefined,
+    remoteSystemMetrics: cachedRemoteSystemMetrics ?? undefined,
     inferenceSpeed: getInferenceSpeed() ?? undefined,
     collectedAt: Date.now(),
   };
@@ -164,6 +185,11 @@ export async function probeInfrastructure(cfg: OpenClawConfig): Promise<Infrastr
     // System metrics
     if (infraCfg.systemMetrics?.enabled) {
       tasks.push(refreshSystemMetrics());
+    }
+
+    // Remote system metrics (network stats from GPU host)
+    if (infraCfg.gpu?.enabled && infraCfg.gpu?.sshHost) {
+      tasks.push(refreshRemoteSystemMetrics(infraCfg));
     }
   }
 
@@ -254,6 +280,16 @@ export function startInfrastructureMonitor(cfg: OpenClawConfig): void {
     }, sysIntervalSec * 1000);
     systemMetricsInterval.unref();
   }
+
+  // Remote system metrics (network from GPU host, piggybacks on GPU interval)
+  if (infraCfg.gpu?.enabled && infraCfg.gpu?.sshHost) {
+    const gpuIntervalSec = infraCfg.gpu.intervalSeconds ?? 30;
+    void refreshRemoteSystemMetrics(infraCfg);
+    const remoteInterval = setInterval(() => {
+      void refreshRemoteSystemMetrics(infraCfg);
+    }, gpuIntervalSec * 1000);
+    remoteInterval.unref();
+  }
 }
 
 /**
@@ -292,4 +328,5 @@ export function stopInfrastructureMonitor(): void {
   cachedTunnels = null;
   cachedMultimodal = null;
   cachedSystemMetrics = null;
+  cachedRemoteSystemMetrics = null;
 }

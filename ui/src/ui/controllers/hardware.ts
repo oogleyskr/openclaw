@@ -86,6 +86,7 @@ export type InfrastructureData = {
     checkedAt: number;
   };
   systemMetrics?: SystemMetricsSnapshot;
+  remoteSystemMetrics?: SystemMetricsSnapshot;
   inferenceSpeed?: InferenceSpeedSnapshot;
   collectedAt: number;
 };
