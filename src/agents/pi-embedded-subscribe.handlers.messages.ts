@@ -216,8 +216,15 @@ export function handleMessageEnd(
     let outputTokens = usage?.output ?? 0;
     // Fallback: estimate tokens from text (~4 chars per token) when provider
     // doesn't return usage data (e.g. llama.cpp streaming).
-    if (outputTokens === 0 && rawText.length > 0) {
-      outputTokens = Math.max(1, Math.round(rawText.length / 4));
+    // Include reasoning/thinking tokens — models like gpt-oss generate most
+    // output as reasoning_content which extractAssistantText doesn't include.
+    if (outputTokens === 0) {
+      const textLen = rawText?.length ?? 0;
+      const thinkingLen = extractAssistantThinking(assistantMessage)?.length ?? 0;
+      const totalChars = textLen + thinkingLen;
+      if (totalChars > 0) {
+        outputTokens = Math.max(1, Math.round(totalChars / 4));
+      }
     }
     if (outputTokens > 0 && durationMs > 100) {
       recordInference(outputTokens, durationMs);
@@ -254,6 +261,19 @@ export function handleMessageEnd(
       cleanedText = parsedFallback.text ?? rawCandidate;
       mediaUrls = parsedFallback.mediaUrls;
       hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+    }
+  }
+
+  // Fallback: if model produced only reasoning/thinking with no visible content
+  // (common with gpt-oss-120b), use the reasoning as the response.
+  if (!cleanedText && !hasMedia) {
+    const thinkingFallback =
+      extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText);
+    if (thinkingFallback?.trim()) {
+      cleanedText = thinkingFallback.trim();
+      ctx.log.warn(
+        `Model produced reasoning but no visible content — using reasoning as reply (${cleanedText.length} chars)`,
+      );
     }
   }
 

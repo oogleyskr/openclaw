@@ -866,6 +866,59 @@ export async function runEmbeddedAttempt(
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
+        // Reasoning-only retry: if the model produced only reasoning/thinking with
+        // no visible content or tool calls (common with gpt-oss-120b), nudge it to
+        // produce an actual response. Limited to one retry to avoid loops.
+        if (!promptError && !aborted) {
+          const lastMsgForRetry = [...messagesSnapshot]
+            .toReversed()
+            .find((m) => m.role === "assistant");
+          if (lastMsgForRetry && Array.isArray(lastMsgForRetry.content)) {
+            const blocks = lastMsgForRetry.content;
+            let hasThinking = false;
+            let hasText = false;
+            let hasToolCall = false;
+            for (const b of blocks) {
+              if (
+                "type" in b &&
+                b.type === "thinking" &&
+                "thinking" in b &&
+                typeof b.thinking === "string" &&
+                b.thinking.trim()
+              ) {
+                hasThinking = true;
+              } else if (
+                "type" in b &&
+                b.type === "text" &&
+                "text" in b &&
+                typeof b.text === "string" &&
+                b.text.trim()
+              ) {
+                hasText = true;
+              } else if ("type" in b && b.type === "toolCall") {
+                hasToolCall = true;
+              }
+            }
+
+            if (hasThinking && !hasText && !hasToolCall) {
+              log.warn(
+                "Reasoning-only response detected — nudging model to produce visible content",
+              );
+              try {
+                await abortable(
+                  activeSession.prompt(
+                    "[You produced reasoning/thinking but no visible reply. Respond to the user now.]",
+                  ),
+                );
+                messagesSnapshot = activeSession.messages.slice();
+                sessionIdUsed = activeSession.sessionId;
+              } catch (retryErr) {
+                log.warn(`Reasoning-only retry failed: ${retryErr}`);
+              }
+            }
+          }
+        }
+
         // Run agent_end hooks to allow plugins to analyze the conversation
         // This is fire-and-forget, so we don't await
         if (hookRunner?.hasHooks("agent_end")) {
