@@ -4,6 +4,7 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { recordInference } from "../infra/inference-speed.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { stripModelInternalTokens } from "../utils/directive-tags.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -240,7 +241,9 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   });
 
-  const text = ctx.stripBlockTags(rawText, { thinking: false, final: false });
+  const text = stripModelInternalTokens(
+    ctx.stripBlockTags(rawText, { thinking: false, final: false }),
+  );
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
@@ -264,18 +267,11 @@ export function handleMessageEnd(
     }
   }
 
-  // Fallback: if model produced only reasoning/thinking with no visible content
-  // (common with gpt-oss-120b), use the reasoning as the response.
-  if (!cleanedText && !hasMedia) {
-    const thinkingFallback =
-      extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText);
-    if (thinkingFallback?.trim()) {
-      cleanedText = thinkingFallback.trim();
-      ctx.log.warn(
-        `Model produced reasoning but no visible content — using reasoning as reply (${cleanedText.length} chars)`,
-      );
-    }
-  }
+  // NOTE: Do NOT use reasoning/thinking as fallback reply content.
+  // The model's reasoning_content is internal thinking and often contains garbled
+  // text (zero-width spaces, ellipsis spam, etc.) that should never reach users.
+  // If the model produces only reasoning with no content, the nudge loop in
+  // attempt.ts will retry. If all retries fail, silence is better than garbage.
 
   if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
     emitAgentEvent({

@@ -10,6 +10,7 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
+import { stripModelInternalTokens } from "../utils/directive-tags.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -451,7 +452,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
     // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
-    const chunk = stripDowngradedToolCallText(stripBlockTags(text, state.blockState)).trimEnd();
+    // Also strip model-internal tokens (commentary to=functions.XXX, <|channel|>, etc.).
+    const chunk = stripModelInternalTokens(
+      stripDowngradedToolCallText(stripBlockTags(text, state.blockState)),
+    ).trimEnd();
     if (!chunk) {
       return;
     }

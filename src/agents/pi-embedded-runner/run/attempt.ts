@@ -16,6 +16,7 @@ import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-butt
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
+import { isOnlyModelInternalTokens } from "../../../utils/directive-tags.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
@@ -882,14 +883,21 @@ export async function runEmbeddedAttempt(
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
-        // Reasoning-only retry: if the model produced only reasoning/thinking with
-        // no visible content or tool calls (common with gpt-oss-120b), nudge it to
-        // produce an actual response. Limited to one retry to avoid loops.
+        // Empty/internal-token-only retry loop: if the model produced no user-facing
+        // content (reasoning-only, model internal tokens, or empty content), nudge it
+        // to produce an actual response. Loop up to 3 times since the model may make
+        // a proper tool call on the nudge but then fall back to internal syntax after
+        // the tool result.
         if (!promptError && !aborted) {
-          const lastMsgForRetry = [...messagesSnapshot]
-            .toReversed()
-            .find((m) => m.role === "assistant");
-          if (lastMsgForRetry && Array.isArray(lastMsgForRetry.content)) {
+          const MAX_NUDGE_RETRIES = 3;
+          for (let nudgeAttempt = 0; nudgeAttempt < MAX_NUDGE_RETRIES; nudgeAttempt++) {
+            const lastMsgForRetry = [...messagesSnapshot]
+              .toReversed()
+              .find((m) => m.role === "assistant");
+            if (!lastMsgForRetry || !Array.isArray(lastMsgForRetry.content)) {
+              break;
+            }
+
             const blocks = lastMsgForRetry.content;
             let hasThinking = false;
             let hasText = false;
@@ -908,7 +916,8 @@ export async function runEmbeddedAttempt(
                 b.type === "text" &&
                 "text" in b &&
                 typeof b.text === "string" &&
-                b.text.trim()
+                b.text.trim() &&
+                !isOnlyModelInternalTokens(b.text)
               ) {
                 hasText = true;
               } else if ("type" in b && b.type === "toolCall") {
@@ -916,21 +925,55 @@ export async function runEmbeddedAttempt(
               }
             }
 
-            if (hasThinking && !hasText && !hasToolCall) {
-              log.warn(
-                "Reasoning-only response detected — nudging model to produce visible content",
+            // If the model produced real text or a tool call, we're done
+            if (hasText || hasToolCall) {
+              break;
+            }
+
+            log.warn(
+              `[nudge ${nudgeAttempt + 1}/${MAX_NUDGE_RETRIES}] ` +
+                (hasThinking
+                  ? "Reasoning-only response — nudging model"
+                  : "No user-facing content (internal tokens only) — nudging model"),
+            );
+            try {
+              await abortable(
+                activeSession.prompt(
+                  "[System: your previous message was empty or contained only internal tokens. " +
+                    "You MUST respond with visible text to the user. If you need to use a tool, " +
+                    "generate a proper function call. Write your response now.]",
+                ),
               );
-              try {
-                await abortable(
-                  activeSession.prompt(
-                    "[You produced reasoning/thinking but no visible reply. Respond to the user now.]",
-                  ),
-                );
-                messagesSnapshot = activeSession.messages.slice();
-                sessionIdUsed = activeSession.sessionId;
-              } catch (retryErr) {
-                log.warn(`Reasoning-only retry failed: ${retryErr}`);
-              }
+              messagesSnapshot = activeSession.messages.slice();
+              sessionIdUsed = activeSession.sessionId;
+            } catch (retryErr: unknown) {
+              log.warn(`Nudge retry ${nudgeAttempt + 1} failed: ${String(retryErr)}`);
+              break;
+            }
+          }
+
+          // After all nudges, check if the user still got nothing. If so, send
+          // a brief fallback message so they're not left staring at silence.
+          const lastMsgFinal = [...messagesSnapshot]
+            .toReversed()
+            .find((m) => m.role === "assistant");
+          if (lastMsgFinal && Array.isArray(lastMsgFinal.content)) {
+            const finalBlocks = lastMsgFinal.content as Array<{ type: string; text?: string }>;
+            const gotText = finalBlocks.some(
+              (b) =>
+                b.type === "text" &&
+                typeof b.text === "string" &&
+                b.text.trim() &&
+                !isOnlyModelInternalTokens(b.text),
+            );
+            const gotToolCall = finalBlocks.some((b) => b.type === "toolCall");
+            if (!gotText && !gotToolCall && params.onBlockReply) {
+              log.warn(
+                "All nudge retries exhausted with no visible content — sending fallback message",
+              );
+              void params.onBlockReply({
+                text: "Sorry, I'm having trouble processing that request right now. Could you try again?",
+              });
             }
           }
         }
