@@ -583,6 +583,9 @@ export const OpenClawSchema = z
             middlewareHost: z.string().optional(),
             middlewarePort: z.number().int().min(1).max(65535).optional(),
             intervalSeconds: z.number().int().positive().optional(),
+            hwMonitorHost: z.string().optional(),
+            hwMonitorPort: z.number().int().min(1).max(65535).optional(),
+            hwMonitorEnabled: z.boolean().optional(),
           })
           .strict()
           .optional(),

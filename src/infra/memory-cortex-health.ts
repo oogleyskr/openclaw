@@ -39,6 +39,28 @@ export type MemoryCortexSnapshot = {
   collectedAt: number;
   /** Error message if any. */
   error?: string;
+  /** GPU temperature (edge/junction) in Celsius from LibreHardwareMonitor. */
+  gpuTemperatureCelsius?: number;
+  /** GPU hot spot temperature in Celsius. */
+  gpuHotSpotCelsius?: number;
+  /** GPU core clock in MHz. */
+  gpuCoreClockMHz?: number;
+  /** GPU memory clock in MHz. */
+  gpuMemoryClockMHz?: number;
+  /** GPU utilization percentage (0-100). */
+  gpuUtilizationPercent?: number;
+  /** GPU fan speed in RPM. */
+  gpuFanRPM?: number;
+  /** GPU fan speed percentage. */
+  gpuFanPercent?: number;
+  /** GPU power draw in watts. */
+  gpuPowerDrawWatts?: number;
+  /** LibreHardwareMonitor status. */
+  hwMonitorStatus?: "ok" | "error";
+  /** LibreHardwareMonitor fetch latency in ms. */
+  hwMonitorLatencyMs?: number;
+  /** List of available sensor categories. */
+  hwSensorsAvailable?: string[];
 };
 
 // Previous metrics totals for computing delta-based tokens/sec.
@@ -65,6 +87,126 @@ function parsePrometheusMetrics(text: string): Record<string, number> {
     }
   }
   return metrics;
+}
+
+// ── LibreHardwareMonitor JSON types and parser ──
+
+/** Node in LHM's data.json tree. */
+type LhmNode = {
+  id: number;
+  Text: string;
+  Min?: string;
+  Value?: string;
+  Max?: string;
+  ImageURL?: string;
+  Children?: LhmNode[];
+};
+
+/** Strip units from LHM sensor values like "64,0 °C" → 64.0 */
+function parseLhmValue(raw: string | undefined): number | undefined {
+  if (!raw || raw === "-") {
+    return undefined;
+  }
+  // LHM uses comma as decimal separator in some locales
+  const cleaned = raw
+    .replace(/,/g, ".")
+    .replace(/[^0-9.-]/g, "")
+    .trim();
+  const val = parseFloat(cleaned);
+  return Number.isFinite(val) ? val : undefined;
+}
+
+/** Find a child node by partial text match (case-insensitive). */
+function findLhmChild(node: LhmNode, text: string): LhmNode | undefined {
+  return node.Children?.find((c) => c.Text.toLowerCase().includes(text.toLowerCase()));
+}
+
+/** Find a sensor value inside a category node by partial name match. */
+function findLhmSensor(category: LhmNode | undefined, name: string): number | undefined {
+  if (!category?.Children) {
+    return undefined;
+  }
+  const sensor = category.Children.find((c) => c.Text.toLowerCase().includes(name.toLowerCase()));
+  return parseLhmValue(sensor?.Value);
+}
+
+type LhmGpuMetrics = {
+  temperatureCelsius?: number;
+  hotSpotCelsius?: number;
+  coreClockMHz?: number;
+  memoryClockMHz?: number;
+  utilizationPercent?: number;
+  fanRPM?: number;
+  fanPercent?: number;
+  powerDrawWatts?: number;
+  sensorsAvailable: string[];
+};
+
+/** Parse LHM data.json and extract AMD GPU metrics. */
+function parseLhmGpuMetrics(data: LhmNode): LhmGpuMetrics | undefined {
+  // Walk the tree to find the AMD GPU node
+  // Structure: root → Computer → Hardware (AMD Radeon VII) → sub-hardware/sensors
+  const findGpuNode = (node: LhmNode): LhmNode | undefined => {
+    const text = node.Text.toLowerCase();
+    if (text.includes("radeon") || (text.includes("amd") && text.includes("gpu"))) {
+      return node;
+    }
+    if (node.Children) {
+      for (const child of node.Children) {
+        const found = findGpuNode(child);
+        if (found) {
+          return found;
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const gpu = findGpuNode(data);
+  if (!gpu) {
+    return undefined;
+  }
+
+  const temps = findLhmChild(gpu, "temperature");
+  const clocks = findLhmChild(gpu, "clock");
+  const fans = findLhmChild(gpu, "fan");
+  const powers = findLhmChild(gpu, "power");
+  const loads = findLhmChild(gpu, "load");
+
+  const sensorsAvailable: string[] = [];
+  if (temps?.Children?.length) {
+    sensorsAvailable.push("temperatures");
+  }
+  if (clocks?.Children?.length) {
+    sensorsAvailable.push("clocks");
+  }
+  if (fans?.Children?.length) {
+    sensorsAvailable.push("fans");
+  }
+  if (powers?.Children?.length) {
+    sensorsAvailable.push("powers");
+  }
+  if (loads?.Children?.length) {
+    sensorsAvailable.push("loads");
+  }
+
+  return {
+    temperatureCelsius:
+      findLhmSensor(temps, "edge") ??
+      findLhmSensor(temps, "gpu core") ??
+      findLhmSensor(temps, "temperature"),
+    hotSpotCelsius: findLhmSensor(temps, "hot spot") ?? findLhmSensor(temps, "junction"),
+    coreClockMHz: findLhmSensor(clocks, "core") ?? findLhmSensor(clocks, "gpu"),
+    memoryClockMHz: findLhmSensor(clocks, "memory"),
+    utilizationPercent: findLhmSensor(loads, "core") ?? findLhmSensor(loads, "gpu"),
+    fanRPM: findLhmSensor(fans, "fan"),
+    fanPercent: findLhmSensor(fans, "fan") != null ? findLhmSensor(loads, "fan") : undefined,
+    powerDrawWatts:
+      findLhmSensor(powers, "package") ??
+      findLhmSensor(powers, "total") ??
+      findLhmSensor(powers, "gpu"),
+    sensorsAvailable,
+  };
 }
 
 /**
@@ -268,6 +410,45 @@ export async function collectMemoryCortexHealth(
       }
     } catch {
       // ignore
+    }
+  }
+
+  // -- LibreHardwareMonitor (supplementary, does not affect overall status) --
+  const hwEnabled = config.hwMonitorEnabled !== false; // default true
+  if (hwEnabled) {
+    const hwHost = config.hwMonitorHost ?? config.llmHost ?? "172.17.96.1";
+    const hwPort = config.hwMonitorPort ?? 8085;
+    const hwUrl = `http://${hwHost}:${hwPort}/data.json`;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5_000);
+      const t0 = Date.now();
+      const resp = await fetch(hwUrl, { signal: controller.signal });
+      clearTimeout(timeout);
+      result.hwMonitorLatencyMs = Date.now() - t0;
+
+      if (resp.ok) {
+        const data = (await resp.json()) as LhmNode;
+        const metrics = parseLhmGpuMetrics(data);
+        if (metrics) {
+          result.gpuTemperatureCelsius = metrics.temperatureCelsius;
+          result.gpuHotSpotCelsius = metrics.hotSpotCelsius;
+          result.gpuCoreClockMHz = metrics.coreClockMHz;
+          result.gpuMemoryClockMHz = metrics.memoryClockMHz;
+          result.gpuUtilizationPercent = metrics.utilizationPercent;
+          result.gpuFanRPM = metrics.fanRPM;
+          result.gpuFanPercent = metrics.fanPercent;
+          result.gpuPowerDrawWatts = metrics.powerDrawWatts;
+          result.hwSensorsAvailable = metrics.sensorsAvailable;
+          result.hwMonitorStatus = "ok";
+        } else {
+          result.hwMonitorStatus = "error";
+        }
+      } else {
+        result.hwMonitorStatus = "error";
+      }
+    } catch {
+      result.hwMonitorStatus = "error";
     }
   }
 

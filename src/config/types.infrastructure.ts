@@ -68,6 +68,12 @@ export type MemoryCortexConfig = {
   middlewarePort?: number;
   /** How often to collect metrics in seconds (default: 15). */
   intervalSeconds?: number;
+  /** Host where LibreHardwareMonitor runs (default: same as llmHost). */
+  hwMonitorHost?: string;
+  /** Port for LibreHardwareMonitor web server (default: 8085). */
+  hwMonitorPort?: number;
+  /** Enable hardware monitoring via LibreHardwareMonitor (default: true when memoryCortex is enabled). */
+  hwMonitorEnabled?: boolean;
 };
 
 export type InfrastructureConfig = {
