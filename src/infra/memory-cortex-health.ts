@@ -124,11 +124,11 @@ export async function collectMemoryCortexHealth(
 
       if (resp.ok) {
         const body = (await resp.json()) as Record<string, unknown>;
-        const settings = body.default_generation_settings as Record<string, unknown> | undefined;
-        if (settings && typeof settings.model === "string") {
-          // Extract filename from path
-          const modelPath = settings.model;
-          result.modelName = modelPath.split(/[/\\]/).pop() ?? modelPath;
+        // model_alias is set by llama-server; fall back to model_path
+        if (typeof body.model_alias === "string" && body.model_alias) {
+          result.modelName = body.model_alias;
+        } else if (typeof body.model_path === "string" && body.model_path) {
+          result.modelName = body.model_path.split(/[/\\]/).pop() ?? body.model_path;
         }
       }
     } catch {
@@ -148,22 +148,29 @@ export async function collectMemoryCortexHealth(
         const text = await resp.text();
         const m = parsePrometheusMetrics(text);
 
+        // Helper: metric keys use "llamacpp:" prefix (colon) in newer builds, "llamacpp_" (underscore) in older
+        const get = (base: string): number | undefined =>
+          m[base.replace("llamacpp_", "llamacpp:")] ?? m[base];
+
         // KV cache
-        if (m["llamacpp_kv_cache_usage_ratio"] != null) {
-          result.kvCacheUsageRatio = Math.round(m["llamacpp_kv_cache_usage_ratio"] * 1000) / 1000;
+        const kvRatioVal = get("llamacpp_kv_cache_usage_ratio");
+        if (kvRatioVal != null) {
+          result.kvCacheUsageRatio = Math.round(kvRatioVal * 1000) / 1000;
         }
-        if (m["llamacpp_kv_cache_tokens"] != null) {
-          result.kvCacheTokens = Math.round(m["llamacpp_kv_cache_tokens"]);
+        const kvTokensVal = get("llamacpp_kv_cache_tokens");
+        if (kvTokensVal != null) {
+          result.kvCacheTokens = Math.round(kvTokensVal);
         }
 
         // Requests
-        if (m["llamacpp_requests_processing"] != null) {
-          result.requestsProcessing = m["llamacpp_requests_processing"];
+        const reqProc = get("llamacpp_requests_processing");
+        if (reqProc != null) {
+          result.requestsProcessing = reqProc;
         }
 
         // Compute generation tokens/sec from delta
-        const curPredTokens = m["llamacpp_tokens_predicted_total"];
-        const curPredSec = m["llamacpp_tokens_predicted_seconds_total"];
+        const curPredTokens = get("llamacpp_tokens_predicted_total");
+        const curPredSec = get("llamacpp_tokens_predicted_seconds_total");
         if (
           curPredTokens != null &&
           curPredSec != null &&
@@ -180,8 +187,8 @@ export async function collectMemoryCortexHealth(
         prevPredictedSeconds = curPredSec ?? null;
 
         // Compute prompt tokens/sec from delta
-        const curPromptTokens = m["llamacpp_prompt_tokens_total"];
-        const curPromptSec = m["llamacpp_prompt_seconds_total"];
+        const curPromptTokens = get("llamacpp_prompt_tokens_total");
+        const curPromptSec = get("llamacpp_prompt_seconds_total");
         if (
           curPromptTokens != null &&
           curPromptSec != null &&
@@ -196,6 +203,20 @@ export async function collectMemoryCortexHealth(
         }
         prevPromptTokens = curPromptTokens ?? null;
         prevPromptSeconds = curPromptSec ?? null;
+
+        // Fallback: use the server's own average if delta wasn't computed
+        if (result.generationTokPerSec == null) {
+          const avgPredicted = get("llamacpp_predicted_tokens_seconds");
+          if (avgPredicted != null && avgPredicted > 0) {
+            result.generationTokPerSec = Math.round(avgPredicted * 10) / 10;
+          }
+        }
+        if (result.promptTokPerSec == null) {
+          const avgPrompt = get("llamacpp_prompt_tokens_seconds");
+          if (avgPrompt != null && avgPrompt > 0) {
+            result.promptTokPerSec = Math.round(avgPrompt * 10) / 10;
+          }
+        }
 
         // Estimate VRAM used: ~8.2GB model + proportional KV cache
         // Qwen3-8B Q8_0 is ~8.2GB, KV cache is the rest of the 16GB
