@@ -1,31 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BillBotApp } from "./app.ts";
+import { describe, expect, it } from "vitest";
+import { mountApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
-// oxlint-disable-next-line typescript/unbound-method
-const originalConnect = BillBotApp.prototype.connect;
-
-function mountApp(pathname: string) {
-  window.history.replaceState({}, "", pathname);
-  const app = document.createElement("billbot-app") as BillBotApp;
-  document.body.append(app);
-  return app;
-}
-
-beforeEach(() => {
-  BillBotApp.prototype.connect = () => {
-    // no-op: avoid real gateway WS connections in browser tests
-  };
-  window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
-
-afterEach(() => {
-  BillBotApp.prototype.connect = originalConnect;
-  window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
+registerAppMountHooks();
 
 describe("chat markdown rendering", () => {
   it("renders markdown inside tool output sidebar", async () => {
