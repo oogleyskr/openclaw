@@ -1,4 +1,4 @@
-import type { BillBotApp } from "./app.ts";
+import type { OpenClawApp } from "./app.ts";
 import type { AgentsListResult } from "./types.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
@@ -6,8 +6,6 @@ import {
   stopLogsPolling,
   startDebugPolling,
   stopDebugPolling,
-  startHardwarePolling,
-  stopHardwarePolling,
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
@@ -19,7 +17,6 @@ import { loadCronJobs, loadCronStatus } from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
-import { loadHardware } from "./controllers/hardware.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
@@ -163,11 +160,6 @@ export function setTab(host: SettingsHost, next: Tab) {
   } else {
     stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   }
-  if (next === "hardware") {
-    startHardwarePolling(host as unknown as Parameters<typeof startHardwarePolling>[0]);
-  } else {
-    stopHardwarePolling(host as unknown as Parameters<typeof stopHardwarePolling>[0]);
-  }
   void refreshActiveTab(host);
   syncUrlWithTab(host, next, false);
 }
@@ -194,33 +186,33 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadChannelsTab(host);
   }
   if (host.tab === "instances") {
-    await loadPresence(host as unknown as BillBotApp);
+    await loadPresence(host as unknown as OpenClawApp);
   }
   if (host.tab === "sessions") {
-    await loadSessions(host as unknown as BillBotApp);
+    await loadSessions(host as unknown as OpenClawApp);
   }
   if (host.tab === "cron") {
     await loadCron(host);
   }
   if (host.tab === "skills") {
-    await loadSkills(host as unknown as BillBotApp);
+    await loadSkills(host as unknown as OpenClawApp);
   }
   if (host.tab === "agents") {
-    await loadAgents(host as unknown as BillBotApp);
-    await loadConfig(host as unknown as BillBotApp);
+    await loadAgents(host as unknown as OpenClawApp);
+    await loadConfig(host as unknown as OpenClawApp);
     const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
     if (agentIds.length > 0) {
-      void loadAgentIdentities(host as unknown as BillBotApp, agentIds);
+      void loadAgentIdentities(host as unknown as OpenClawApp, agentIds);
     }
     const agentId =
       host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
     if (agentId) {
-      void loadAgentIdentity(host as unknown as BillBotApp, agentId);
+      void loadAgentIdentity(host as unknown as OpenClawApp, agentId);
       if (host.agentsPanel === "skills") {
-        void loadAgentSkills(host as unknown as BillBotApp, agentId);
+        void loadAgentSkills(host as unknown as OpenClawApp, agentId);
       }
       if (host.agentsPanel === "channels") {
-        void loadChannels(host as unknown as BillBotApp, false);
+        void loadChannels(host as unknown as OpenClawApp, false);
       }
       if (host.agentsPanel === "cron") {
         void loadCron(host);
@@ -228,10 +220,10 @@ export async function refreshActiveTab(host: SettingsHost) {
     }
   }
   if (host.tab === "nodes") {
-    await loadNodes(host as unknown as BillBotApp);
-    await loadDevices(host as unknown as BillBotApp);
-    await loadConfig(host as unknown as BillBotApp);
-    await loadExecApprovals(host as unknown as BillBotApp);
+    await loadNodes(host as unknown as OpenClawApp);
+    await loadDevices(host as unknown as OpenClawApp);
+    await loadConfig(host as unknown as OpenClawApp);
+    await loadExecApprovals(host as unknown as OpenClawApp);
   }
   if (host.tab === "chat") {
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
@@ -240,20 +232,17 @@ export async function refreshActiveTab(host: SettingsHost) {
       !host.chatHasAutoScrolled,
     );
   }
-  if (host.tab === "hardware") {
-    await loadHardware(host as unknown as BillBotApp);
-  }
   if (host.tab === "config") {
-    await loadConfigSchema(host as unknown as BillBotApp);
-    await loadConfig(host as unknown as BillBotApp);
+    await loadConfigSchema(host as unknown as OpenClawApp);
+    await loadConfig(host as unknown as OpenClawApp);
   }
   if (host.tab === "debug") {
-    await loadDebug(host as unknown as BillBotApp);
+    await loadDebug(host as unknown as OpenClawApp);
     host.eventLog = host.eventLogBuffer;
   }
   if (host.tab === "logs") {
     host.logsAtBottom = true;
-    await loadLogs(host as unknown as BillBotApp, { reset: true });
+    await loadLogs(host as unknown as OpenClawApp, { reset: true });
     scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
   }
 }
@@ -370,11 +359,6 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
   } else {
     stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   }
-  if (next === "hardware") {
-    startHardwarePolling(host as unknown as Parameters<typeof startHardwarePolling>[0]);
-  } else {
-    stopHardwarePolling(host as unknown as Parameters<typeof stopHardwarePolling>[0]);
-  }
   if (host.connected) {
     void refreshActiveTab(host);
   }
@@ -420,26 +404,26 @@ export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, re
 
 export async function loadOverview(host: SettingsHost) {
   await Promise.all([
-    loadChannels(host as unknown as BillBotApp, false),
-    loadPresence(host as unknown as BillBotApp),
-    loadSessions(host as unknown as BillBotApp),
-    loadCronStatus(host as unknown as BillBotApp),
-    loadDebug(host as unknown as BillBotApp),
+    loadChannels(host as unknown as OpenClawApp, false),
+    loadPresence(host as unknown as OpenClawApp),
+    loadSessions(host as unknown as OpenClawApp),
+    loadCronStatus(host as unknown as OpenClawApp),
+    loadDebug(host as unknown as OpenClawApp),
   ]);
 }
 
 export async function loadChannelsTab(host: SettingsHost) {
   await Promise.all([
-    loadChannels(host as unknown as BillBotApp, true),
-    loadConfigSchema(host as unknown as BillBotApp),
-    loadConfig(host as unknown as BillBotApp),
+    loadChannels(host as unknown as OpenClawApp, true),
+    loadConfigSchema(host as unknown as OpenClawApp),
+    loadConfig(host as unknown as OpenClawApp),
   ]);
 }
 
 export async function loadCron(host: SettingsHost) {
   await Promise.all([
-    loadChannels(host as unknown as BillBotApp, false),
-    loadCronStatus(host as unknown as BillBotApp),
-    loadCronJobs(host as unknown as BillBotApp),
+    loadChannels(host as unknown as OpenClawApp, false),
+    loadCronStatus(host as unknown as OpenClawApp),
+    loadCronJobs(host as unknown as OpenClawApp),
   ]);
 }

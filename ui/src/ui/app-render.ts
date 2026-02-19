@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
+import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
@@ -24,6 +25,7 @@ import {
   runCronJob,
   removeCronJob,
   addCronJob,
+  normalizeCronFormState,
 } from "./controllers/cron.ts";
 import { loadDebug, callDebugMethod } from "./controllers/debug.ts";
 import {
@@ -43,7 +45,7 @@ import { loadHardware } from "./controllers/hardware.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSession, loadSessions, patchSession } from "./controllers/sessions.ts";
+import { deleteSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
   loadSkills,
@@ -52,16 +54,7 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { icons } from "./icons.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-
-// Module-scope debounce for usage date changes (avoids type-unsafe hacks on state object)
-let usageDateDebounceTimeout: number | null = null;
-const debouncedLoadUsage = (state: UsageState) => {
-  if (usageDateDebounceTimeout) {
-    clearTimeout(usageDateDebounceTimeout);
-  }
-  usageDateDebounceTimeout = window.setTimeout(() => void loadUsage(state), 400);
-};
+import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -101,7 +94,7 @@ export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
-  const chatDisabledReason = state.connected ? null : "Disconnected from gateway.";
+  const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -126,8 +119,8 @@ export function renderApp(state: AppViewState) {
                 ...state.settings,
                 navCollapsed: !state.settings.navCollapsed,
               })}
-            title="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
-            aria-label="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
+            title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+            aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
           >
             <span class="nav-collapse-toggle__icon">${icons.menu}</span>
           </button>
@@ -141,8 +134,8 @@ export function renderApp(state: AppViewState) {
         <div class="topbar-status">
           <div class="pill">
             <span class="statusDot ${state.connected ? "ok" : ""}"></span>
-            <span>Health</span>
-            <span class="mono">${state.connected ? "OK" : "Offline"}</span>
+            <span>${t("common.health")}</span>
+            <span class="mono">${state.connected ? t("common.ok") : t("common.offline")}</span>
           </div>
           ${renderThemeToggle(state)}
         </div>
@@ -165,7 +158,7 @@ export function renderApp(state: AppViewState) {
                 }}
                 aria-expanded=${!isGroupCollapsed}
               >
-                <span class="nav-label__text">${group.label}</span>
+                <span class="nav-label__text">${t(`nav.${group.label}`)}</span>
                 <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
               </button>
               <div class="nav-group__items">
@@ -176,7 +169,7 @@ export function renderApp(state: AppViewState) {
         })}
         <div class="nav-group nav-group--links">
           <div class="nav-label nav-label--static">
-            <span class="nav-label__text">Resources</span>
+            <span class="nav-label__text">${t("common.resources")}</span>
           </div>
           <div class="nav-group__items">
             <a
@@ -184,10 +177,10 @@ export function renderApp(state: AppViewState) {
               href="https://docs.billbot.app"
               target="_blank"
               rel="noreferrer"
-              title="Docs (opens in new tab)"
+              title="${t("common.docs")} (opens in new tab)"
             >
               <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-              <span class="nav-item__text">Docs</span>
+              <span class="nav-item__text">${t("common.docs")}</span>
             </a>
           </div>
         </div>
@@ -306,7 +299,7 @@ export function renderApp(state: AppViewState) {
                 },
                 onRefresh: () => loadSessions(state),
                 onPatch: (key, patch) => patchSession(state, key, patch),
-                onDelete: (key) => deleteSession(state, key),
+                onDelete: (key) => deleteSessionAndRefresh(state, key),
               })
             : nothing
         }
@@ -330,7 +323,8 @@ export function renderApp(state: AppViewState) {
                 channelMeta: state.channelsSnapshot?.channelMeta ?? [],
                 runsJobId: state.cronRunsJobId,
                 runs: state.cronRuns,
-                onFormChange: (patch) => (state.cronForm = { ...state.cronForm, ...patch }),
+                onFormChange: (patch) =>
+                  (state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch })),
                 onRefresh: () => state.loadCron(),
                 onAdd: () => addCronJob(state),
                 onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
