@@ -1,10 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
-import fs from "node:fs/promises";
-import os from "node:os";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  SessionManager,
+  SettingsManager,
+} from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -20,7 +24,6 @@ import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-butt
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
-import { isOnlyModelInternalTokens } from "../../../utils/directive-tags.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
@@ -47,10 +50,7 @@ import {
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
-import {
-  ensurePiCompactionReserveTokens,
-  resolveCompactionReserveTokensFloor,
-} from "../../pi-settings.js";
+import { applyPiCompactionSettingsFromConfig } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
@@ -75,7 +75,7 @@ import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
-import { buildEmbeddedExtensionPaths } from "../extensions.js";
+import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
@@ -99,10 +99,9 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import { createToolCallParserWrapper } from "../tool-call-parser.js";
+import { dropThinkingBlocks } from "../thinking.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
-import { resolveExecToolDefaults } from "../utils.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
@@ -110,6 +109,7 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -295,10 +295,8 @@ export async function runEmbeddedAttempt(
       ? []
       : createOpenClawCodingTools({
           exec: {
-            ...resolveExecToolDefaults(params.config),
             ...params.execOverrides,
             elevated: params.bashElevated,
-            senderIsOwner: params.senderIsOwner,
           },
           sandbox,
           messageProvider: params.messageChannel ?? params.messageProvider,
@@ -445,6 +443,11 @@ export async function runEmbeddedAttempt(
       reasoningLevel: params.reasoningLevel ?? "off",
       extraSystemPrompt: params.extraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
+      ownerDisplay: params.config?.commands?.ownerDisplay,
+      ownerDisplaySecret:
+        params.config?.commands?.ownerDisplaySecret ??
+        params.config?.gateway?.auth?.token ??
+        params.config?.gateway?.remote?.token,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
@@ -536,19 +539,32 @@ export async function runEmbeddedAttempt(
       });
 
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
-      ensurePiCompactionReserveTokens({
+      applyPiCompactionSettingsFromConfig({
         settingsManager,
-        minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
+        cfg: params.config,
       });
 
-      // Call for side effects (sets compaction/pruning runtime state)
-      buildEmbeddedExtensionPaths({
+      // Sets compaction/pruning runtime state and returns extension factories
+      // that must be passed to the resource loader for the safeguard to be active.
+      const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
       });
+      // Only create an explicit resource loader when there are extension factories
+      // to register; otherwise let createAgentSession use its built-in default.
+      let resourceLoader: DefaultResourceLoader | undefined;
+      if (extensionFactories.length > 0) {
+        resourceLoader = new DefaultResourceLoader({
+          cwd: resolvedWorkspace,
+          agentDir,
+          settingsManager,
+          extensionFactories,
+        });
+        await resourceLoader.reload();
+      }
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
@@ -591,6 +607,7 @@ export async function runEmbeddedAttempt(
         customTools: allCustomTools,
         sessionManager,
         settingsManager,
+        resourceLoader,
       }));
       applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
@@ -652,19 +669,6 @@ export async function runEmbeddedAttempt(
         params.streamParams,
       );
 
-      // Apply tool call parser for models that emit non-standard tool call formats
-      // (e.g., <tool_call> XML tags instead of native tool_calls in the response).
-      // This is configured via compat.toolCallPatterns in the model definition.
-      const modelCompat = params.model?.compat;
-      const toolCallParserFn = createToolCallParserWrapper(
-        activeSession.agent.streamFn,
-        modelCompat,
-      );
-      if (toolCallParserFn) {
-        log.debug(`applying tool call parser wrapper for ${params.provider}/${params.modelId}`);
-        activeSession.agent.streamFn = toolCallParserFn;
-      }
-
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
           messages: activeSession.messages,
@@ -673,6 +677,30 @@ export async function runEmbeddedAttempt(
         });
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
+
+      // Copilot/Claude can reject persisted `thinking` blocks (e.g. thinkingSignature:"reasoning_text")
+      // on *any* follow-up provider call (including tool continuations). Wrap the stream function
+      // so every outbound request sees sanitized messages.
+      if (transcriptPolicy.dropThinkingBlocks) {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          const messages = ctx?.messages;
+          if (!Array.isArray(messages)) {
+            return inner(model, context, options);
+          }
+          const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
+          if (sanitized === messages) {
+            return inner(model, context, options);
+          }
+          const nextContext = {
+            ...(context as unknown as Record<string, unknown>),
+            messages: sanitized,
+          } as unknown;
+          return inner(model, nextContext as typeof context, options);
+        };
+      }
+
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
@@ -966,7 +994,7 @@ export async function runEmbeddedAttempt(
             sessionManager.resetLeaf();
           }
           const sessionContext = sessionManager.buildSessionContext();
-          const sanitizedOrphan = transcriptPolicy.normalizeAntigravityThinkingBlocks
+          const sanitizedOrphan = transcriptPolicy.sanitizeThinkingSignatures
             ? sanitizeAntigravityThinkingBlocks(sessionContext.messages)
             : sessionContext.messages;
           activeSession.agent.replaceMessages(sanitizedOrphan);
@@ -1165,101 +1193,6 @@ export async function runEmbeddedAttempt(
               : undefined,
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
-
-        // Empty/internal-token-only retry loop: if the model produced no user-facing
-        // content (reasoning-only, model internal tokens, or empty content), nudge it
-        // to produce an actual response. Loop up to 3 times since the model may make
-        // a proper tool call on the nudge but then fall back to internal syntax after
-        // the tool result.
-        if (!promptError && !aborted) {
-          const MAX_NUDGE_RETRIES = 3;
-          for (let nudgeAttempt = 0; nudgeAttempt < MAX_NUDGE_RETRIES; nudgeAttempt++) {
-            const lastMsgForRetry = [...messagesSnapshot]
-              .toReversed()
-              .find((m) => m.role === "assistant");
-            if (!lastMsgForRetry || !Array.isArray(lastMsgForRetry.content)) {
-              break;
-            }
-
-            const blocks = lastMsgForRetry.content;
-            let hasThinking = false;
-            let hasText = false;
-            let hasToolCall = false;
-            for (const b of blocks) {
-              if (
-                "type" in b &&
-                b.type === "thinking" &&
-                "thinking" in b &&
-                typeof b.thinking === "string" &&
-                b.thinking.trim()
-              ) {
-                hasThinking = true;
-              } else if (
-                "type" in b &&
-                b.type === "text" &&
-                "text" in b &&
-                typeof b.text === "string" &&
-                b.text.trim() &&
-                !isOnlyModelInternalTokens(b.text)
-              ) {
-                hasText = true;
-              } else if ("type" in b && b.type === "toolCall") {
-                hasToolCall = true;
-              }
-            }
-
-            // If the model produced real text or a tool call, we're done
-            if (hasText || hasToolCall) {
-              break;
-            }
-
-            log.warn(
-              `[nudge ${nudgeAttempt + 1}/${MAX_NUDGE_RETRIES}] ` +
-                (hasThinking
-                  ? "Reasoning-only response — nudging model"
-                  : "No user-facing content (internal tokens only) — nudging model"),
-            );
-            try {
-              await abortable(
-                activeSession.prompt(
-                  "[System: your previous message was empty or contained only internal tokens. " +
-                    "You MUST respond with visible text to the user. If you need to use a tool, " +
-                    "generate a proper function call. Write your response now.]",
-                ),
-              );
-              messagesSnapshot = activeSession.messages.slice();
-              sessionIdUsed = activeSession.sessionId;
-            } catch (retryErr: unknown) {
-              log.warn(`Nudge retry ${nudgeAttempt + 1} failed: ${String(retryErr)}`);
-              break;
-            }
-          }
-
-          // After all nudges, check if the user still got nothing. If so, send
-          // a brief fallback message so they're not left staring at silence.
-          const lastMsgFinal = [...messagesSnapshot]
-            .toReversed()
-            .find((m) => m.role === "assistant");
-          if (lastMsgFinal && Array.isArray(lastMsgFinal.content)) {
-            const finalBlocks = lastMsgFinal.content as Array<{ type: string; text?: string }>;
-            const gotText = finalBlocks.some(
-              (b) =>
-                b.type === "text" &&
-                typeof b.text === "string" &&
-                b.text.trim() &&
-                !isOnlyModelInternalTokens(b.text),
-            );
-            const gotToolCall = finalBlocks.some((b) => b.type === "toolCall");
-            if (!gotText && !gotToolCall && params.onBlockReply) {
-              log.warn(
-                "All nudge retries exhausted with no visible content — sending fallback message",
-              );
-              void params.onBlockReply({
-                text: "Sorry, I'm having trouble processing that request right now. Could you try again?",
-              });
-            }
-          }
-        }
 
         // Run agent_end hooks to allow plugins to analyze the conversation
         // This is fire-and-forget, so we don't await
