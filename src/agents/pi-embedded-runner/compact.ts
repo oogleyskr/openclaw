@@ -363,7 +363,6 @@ export async function compactEmbeddedPiSessionDirect(
     const toolsRaw = createOpenClawCodingTools({
       exec: {
         elevated: params.bashElevated,
-        senderIsOwner: params.senderIsOwner,
       },
       sandbox,
       messageProvider: params.messageChannel ?? params.messageProvider,
