@@ -1,5 +1,5 @@
-import type { Skill } from "@mariozechner/pi-coding-agent";
 import crypto from "node:crypto";
+import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
@@ -93,6 +93,18 @@ export type SessionEntry = {
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
+  /** Timestamp (ms) when Memory Cortex last ingested this session. */
+  memoryCortexIngestedAt?: number;
+  /** Timestamp (ms) when Memory Cortex last recalled for this session. */
+  memoryCortexRecalledAt?: number;
+  /** Cached async synthesis from Memory Cortex (one turn behind). */
+  memoryCortexSynthesis?: {
+    query: string;
+    response: string;
+    cachedAt: number;
+  };
+  /** Number of facts injected in the most recent recall. */
+  memoryCortexFactsInjected?: number;
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;
