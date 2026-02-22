@@ -74,6 +74,24 @@ export type MemoryCortexConfig = {
   hwMonitorPort?: number;
   /** Enable hardware monitoring via LibreHardwareMonitor (default: true when memoryCortex is enabled). */
   hwMonitorEnabled?: boolean;
+  /** Auto-ingest conversations after each turn (default: false). */
+  autoIngest?: boolean;
+  /** Auto-recall memories before each LLM call (default: false). */
+  autoRecall?: boolean;
+  /** Timeout in ms for recall before skipping (default: 200). */
+  recallTimeoutMs?: number;
+  /** Max tokens of memory context to inject (default: 500). */
+  recallMaxTokens?: number;
+  /** Max number of facts to inject (default: 15). */
+  recallMaxFacts?: number;
+  /** TTL in ms for cached synthesis (default: 300000 = 5 min). */
+  synthesisCacheTtlMs?: number;
+  /** Skip memory operations for heartbeat sessions (default: true). */
+  skipHeartbeat?: boolean;
+  /** Host for the embeddings service (default: localhost). */
+  embedHost?: string;
+  /** Port for the embeddings service (default: 8105). */
+  embedPort?: number;
 };
 
 export type InfrastructureConfig = {
