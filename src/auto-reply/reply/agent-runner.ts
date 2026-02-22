@@ -36,6 +36,10 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
+import {
+  runMemoryCortexRecall,
+  runMemoryCortexIngestionIfNeeded,
+} from "./agent-runner-memory-cortex.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
@@ -258,6 +262,23 @@ export async function runReplyAgent(params: {
     isHeartbeat,
   });
 
+  // Memory Cortex: recall relevant memories before LLM call
+  const memoryCortexRecall = await runMemoryCortexRecall({
+    cfg,
+    followupRun,
+    isHeartbeat,
+    sessionEntry: activeSessionEntry,
+    sessionStore: activeSessionStore,
+    sessionKey,
+    storePath,
+    commandBody,
+  });
+
+  // Inject memory context into the command body if available
+  const enrichedCommandBody = memoryCortexRecall.memoryContext
+    ? `${memoryCortexRecall.memoryContext}\n\n---\n\n${commandBody}`
+    : commandBody;
+
   const runFollowupTurn = createFollowupRunner({
     opts,
     typing,
@@ -355,7 +376,7 @@ export async function runReplyAgent(params: {
   try {
     const runStartedAt = Date.now();
     const runOutcome = await runAgentTurnWithFallback({
-      commandBody,
+      commandBody: enrichedCommandBody,
       followupRun,
       sessionCtx,
       opts,
@@ -717,6 +738,16 @@ export async function runReplyAgent(params: {
         // Silent failure — audit is best-effort
       }
     }
+
+    // Memory Cortex: ingest session history (fire-and-forget, non-blocking)
+    void runMemoryCortexIngestionIfNeeded({
+      cfg,
+      followupRun,
+      isHeartbeat,
+      sessionEntry: activeSessionEntry,
+      sessionKey,
+      storePath,
+    });
 
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
