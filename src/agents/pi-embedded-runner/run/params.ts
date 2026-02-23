@@ -101,4 +101,6 @@ export type RunEmbeddedPiAgentParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  /** Context planner tool allowlist (null = no filtering, string[] = only these tools). */
+  contextPlanToolAllowlist?: string[] | null;
 };

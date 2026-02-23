@@ -91,6 +91,8 @@ export async function runAgentTurnWithFallback(params: {
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
+  /** Context planner tool allowlist (null = no filtering). */
+  contextPlanToolAllowlist?: string[] | null;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
@@ -304,6 +306,7 @@ export async function runAgentTurnWithFallback(params: {
             })(),
             suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
             images: params.opts?.images,
+            contextPlanToolAllowlist: params.contextPlanToolAllowlist,
             abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
