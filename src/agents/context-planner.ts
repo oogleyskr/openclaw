@@ -227,6 +227,17 @@ const CATEGORIES: CategoryDef[] = [
   },
 ];
 
+// ── Known tool names ────────────────────────────────────────────────────
+
+/**
+ * Union of ALL tool names mentioned in ANY category definition.
+ * Used by the pipeline step to convert allowlist → denylist so that
+ * unknown tools (MCP, plugins, etc.) always pass through.
+ */
+export const ALL_KNOWN_CORE_TOOLS: ReadonlySet<string> = new Set(
+  CATEGORIES.flatMap((cat) => cat.tools),
+);
+
 // ── Classifier ──────────────────────────────────────────────────────────
 
 function scoreCategory(msg: string, cat: CategoryDef, config?: ContextPlannerConfig): number {

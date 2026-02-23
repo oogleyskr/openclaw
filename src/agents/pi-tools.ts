@@ -20,6 +20,7 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
+import { ALL_KNOWN_CORE_TOOLS } from "./context-planner.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -483,12 +484,17 @@ export function createOpenClawCodingTools(options?: {
       }),
       { policy: sandbox?.tools, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
-      // Context planner: final step — can only further restrict, never expand.
+      // Context planner: deny-list approach so unknown tools (MCP, plugins) pass through.
+      // Only deny core tools the planner knows about but didn't select.
       ...(options?.contextPlanToolAllowlist
         ? [
             {
-              policy: { allow: options.contextPlanToolAllowlist },
-              label: "context-planner allowlist",
+              policy: {
+                deny: [...ALL_KNOWN_CORE_TOOLS].filter(
+                  (t) => !options.contextPlanToolAllowlist!.includes(t),
+                ),
+              },
+              label: "context-planner denylist",
             },
           ]
         : []),
