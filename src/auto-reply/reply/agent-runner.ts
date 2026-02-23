@@ -16,6 +16,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -271,7 +272,7 @@ export async function runReplyAgent(params: {
       : undefined;
 
   if (contextPlan && contextPlan.categories.length > 0) {
-    defaultRuntime.info(
+    logVerbose(
       `[context-planner] classified: categories=[${contextPlan.categories.join(",")}] ` +
         `tools=${contextPlan.toolAllowlist ? `${contextPlan.toolAllowlist.length}` : "all"} ` +
         `memory=${contextPlan.memoryParams.maxFacts}/${contextPlan.memoryParams.maxTokens} ` +
