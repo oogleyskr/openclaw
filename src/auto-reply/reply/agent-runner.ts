@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { classifyMessage } from "../../agents/context-planner.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -262,6 +263,27 @@ export async function runReplyAgent(params: {
     isHeartbeat,
   });
 
+  // Pre-flight context planner: classify message to tune tools, memory, thinking
+  const contextPlannerConfig = cfg.agents?.defaults?.contextPlanner;
+  const contextPlan =
+    !isHeartbeat && contextPlannerConfig?.enabled !== false
+      ? classifyMessage(commandBody, contextPlannerConfig)
+      : undefined;
+
+  if (contextPlan && contextPlan.categories.length > 0) {
+    defaultRuntime.info(
+      `[context-planner] classified: categories=[${contextPlan.categories.join(",")}] ` +
+        `tools=${contextPlan.toolAllowlist ? `${contextPlan.toolAllowlist.length}` : "all"} ` +
+        `memory=${contextPlan.memoryParams.maxFacts}/${contextPlan.memoryParams.maxTokens} ` +
+        `thinking=${contextPlan.thinkLevel}`,
+    );
+  }
+
+  // Apply thinking level override from context planner
+  if (contextPlan?.thinkLevel && contextPlannerConfig?.thinkingTuning !== false) {
+    followupRun.run.thinkLevel = contextPlan.thinkLevel;
+  }
+
   // Memory Cortex: recall relevant memories before LLM call
   const memoryCortexRecall = await runMemoryCortexRecall({
     cfg,
@@ -272,12 +294,18 @@ export async function runReplyAgent(params: {
     sessionKey,
     storePath,
     commandBody,
+    contextPlanMemoryOverrides: contextPlan?.memoryParams,
   });
 
   // Inject memory context into the command body if available
-  const enrichedCommandBody = memoryCortexRecall.memoryContext
+  let enrichedCommandBody = memoryCortexRecall.memoryContext
     ? `${memoryCortexRecall.memoryContext}\n\n---\n\n${commandBody}`
     : commandBody;
+
+  // Prepend context planner hint
+  if (contextPlan?.hint) {
+    enrichedCommandBody = `${contextPlan.hint}\n\n${enrichedCommandBody}`;
+  }
 
   const runFollowupTurn = createFollowupRunner({
     opts,
@@ -397,6 +425,7 @@ export async function runReplyAgent(params: {
       activeSessionStore,
       storePath,
       resolvedVerboseLevel,
+      contextPlanToolAllowlist: contextPlan?.toolAllowlist,
     });
 
     if (runOutcome.kind === "final") {

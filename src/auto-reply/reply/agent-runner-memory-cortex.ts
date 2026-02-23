@@ -210,6 +210,12 @@ export async function runMemoryCortexRecall(params: {
   sessionKey?: string;
   storePath?: string;
   commandBody: string;
+  /** Optional overrides from the context planner. */
+  contextPlanMemoryOverrides?: {
+    maxFacts: number;
+    maxTokens: number;
+    skip: boolean;
+  };
 }): Promise<MemoryCortexRecallResult> {
   const noResult: MemoryCortexRecallResult = {
     memoryContext: null,
@@ -233,12 +239,23 @@ export async function runMemoryCortexRecall(params: {
     return noResult;
   }
 
+  // Guard: context planner says skip recall entirely
+  if (params.contextPlanMemoryOverrides?.skip) {
+    logVerbose("[memory-cortex] context planner skipped recall (casual message)");
+    return noResult;
+  }
+
+  // Apply context planner overrides if present
+  const effectiveMaxFacts = params.contextPlanMemoryOverrides?.maxFacts ?? mc.recallMaxFacts ?? 15;
+  const effectiveMaxTokens =
+    params.contextPlanMemoryOverrides?.maxTokens ?? mc.recallMaxTokens ?? 500;
+
   // Perform hybrid search with configured timeout
   const searchResult = await hybridSearch(
     mc,
     query,
     params.followupRun.run.senderName,
-    mc.recallMaxFacts ?? 15,
+    effectiveMaxFacts,
     mc.recallTimeoutMs ?? 200,
   );
 
@@ -255,12 +272,7 @@ export async function runMemoryCortexRecall(params: {
   // Format facts as context block
   const memoryContext =
     factsCount > 0 || cachedSynthesis
-      ? formatFactsAsContext(
-          facts,
-          mc.recallMaxTokens ?? 500,
-          cachedSynthesis,
-          mc.synthesisCacheTtlMs,
-        )
+      ? formatFactsAsContext(facts, effectiveMaxTokens, cachedSynthesis, mc.synthesisCacheTtlMs)
       : null;
 
   // Fire async synthesis in background for next turn (don't await)
