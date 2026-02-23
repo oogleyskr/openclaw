@@ -121,6 +121,38 @@ export type CliBackendConfig = {
   };
 };
 
+export type ContextPlannerCategoryOverride = {
+  /** Extra keywords to match for this category. */
+  extraPatterns?: string[];
+  /** Extra tools to include for this category. */
+  extraTools?: string[];
+  /** Override the thinking level for this category. */
+  thinkingLevel?: string;
+  /** Disable this category entirely. */
+  disabled?: boolean;
+};
+
+export type ContextPlannerConfig = {
+  /** Master switch (default: true when present). */
+  enabled?: boolean;
+  /** Filter tools based on message classification (default: true). */
+  toolFiltering?: boolean;
+  /** Tune memory recall parameters per category (default: true). */
+  memoryTuning?: boolean;
+  /** Adjust thinking level per category (default: true). */
+  thinkingTuning?: boolean;
+  /** Prepend task-type hint to prompt (default: true). */
+  promptAnnotation?: boolean;
+  /** Tools that always pass through regardless of classification. */
+  alwaysInclude?: string[];
+  /** Minimum message length (chars) before complex category can fire (default: 300). */
+  complexThreshold?: number;
+  /** If true, unclassified messages get full tool set (default: true). */
+  fallbackToFull?: boolean;
+  /** Category overrides — customize patterns or tool sets per category. */
+  categories?: Record<string, ContextPlannerCategoryOverride>;
+};
+
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). */
   model?: AgentModelListConfig;
@@ -282,6 +314,8 @@ export type AgentDefaultsConfig = {
     /** Auto-prune sandbox containers. */
     prune?: SandboxPruneSettings;
   };
+  /** Pre-flight context planner: classify messages to filter tools, tune memory, select thinking. */
+  contextPlanner?: ContextPlannerConfig;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";

@@ -168,6 +168,32 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    contextPlanner: z
+      .object({
+        enabled: z.boolean().optional(),
+        toolFiltering: z.boolean().optional(),
+        memoryTuning: z.boolean().optional(),
+        thinkingTuning: z.boolean().optional(),
+        promptAnnotation: z.boolean().optional(),
+        alwaysInclude: z.array(z.string()).optional(),
+        complexThreshold: z.number().int().positive().optional(),
+        fallbackToFull: z.boolean().optional(),
+        categories: z
+          .record(
+            z.string(),
+            z
+              .object({
+                extraPatterns: z.array(z.string()).optional(),
+                extraTools: z.array(z.string()).optional(),
+                thinkingLevel: z.string().optional(),
+                disabled: z.boolean().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
