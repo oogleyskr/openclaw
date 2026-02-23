@@ -483,6 +483,15 @@ export function createOpenClawCodingTools(options?: {
       }),
       { policy: sandbox?.tools, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
+      // Context planner: final step — can only further restrict, never expand.
+      ...(options?.contextPlanToolAllowlist
+        ? [
+            {
+              policy: { allow: options.contextPlanToolAllowlist },
+              label: "context-planner allowlist",
+            },
+          ]
+        : []),
     ],
   });
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
