@@ -35,7 +35,7 @@ export function stripModelInternalTokens(text: string): string {
   }
   let cleaned = text;
   // Strip zero-width Unicode characters (common in garbled Harmony output)
-  cleaned = cleaned.replace(/[\u200B\u200C\u200D\u200E\u200F\uFEFF]/g, "");
+  cleaned = cleaned.replace(/\u200B|\u200C|\u200D|\u200E|\u200F|\uFEFF/g, "");
   cleaned = cleaned.replace(MODEL_SPECIAL_TOKEN_RE, " ");
   cleaned = cleaned.replace(MODEL_COMMENTARY_RE, " ");
   // After stripping <|start|>, "assistant" may be left at the beginning
@@ -85,6 +85,17 @@ type StripInlineDirectiveTagsResult = {
   changed: boolean;
 };
 
+type MessageTextPart = {
+  type: "text";
+  text: string;
+} & Record<string, unknown>;
+
+type MessagePart = Record<string, unknown> | null | undefined;
+
+export type DisplayMessageWithContent = {
+  content?: unknown;
+} & Record<string, unknown>;
+
 export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDirectiveTagsResult {
   if (!text) {
     return { text, changed: false };
@@ -95,6 +106,36 @@ export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDir
     text: stripped,
     changed: stripped !== text,
   };
+}
+
+function isMessageTextPart(part: MessagePart): part is MessageTextPart {
+  return Boolean(part) && part?.type === "text" && typeof part.text === "string";
+}
+
+/**
+ * Strips inline directive tags from message text blocks while preserving message shape.
+ * Empty post-strip text stays empty-string to preserve caller semantics.
+ */
+export function stripInlineDirectiveTagsFromMessageForDisplay(
+  message: DisplayMessageWithContent | undefined,
+): DisplayMessageWithContent | undefined {
+  if (!message) {
+    return message;
+  }
+  if (!Array.isArray(message.content)) {
+    return message;
+  }
+  const cleaned = message.content.map((part) => {
+    if (!part || typeof part !== "object") {
+      return part;
+    }
+    const record = part as MessagePart;
+    if (!isMessageTextPart(record)) {
+      return part;
+    }
+    return { ...record, text: stripInlineDirectiveTagsForDisplay(record.text).text };
+  });
+  return { ...message, content: cleaned };
 }
 
 export function parseInlineDirectives(

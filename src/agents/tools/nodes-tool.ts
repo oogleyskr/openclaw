@@ -1,7 +1,6 @@
+import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import crypto from "node:crypto";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   type CameraFacing,
   cameraTempPath,
@@ -18,6 +17,7 @@ import {
   writeScreenRecordToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -482,6 +482,7 @@ export function createNodesTool(options?: {
                 id: approvalId,
                 command: cmdText,
                 cwd,
+                nodeId,
                 host: "node",
                 agentId,
                 sessionKey,

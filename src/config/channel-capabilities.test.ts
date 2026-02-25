@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "./config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveChannelCapabilities } from "./channel-capabilities.js";
+import type { OpenClawConfig } from "./config.js";
 
 describe("resolveChannelCapabilities", () => {
   beforeEach(() => {
@@ -148,18 +148,4 @@ const baseRegistry = createTestRegistry([
   { pluginId: "slack", source: "test", plugin: createStubPlugin("slack") },
 ]);
 
-const createMSTeamsPlugin = (): ChannelPlugin => ({
-  id: "msteams",
-  meta: {
-    id: "msteams",
-    label: "Microsoft Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-});
+const createMSTeamsPlugin = (): ChannelPlugin => createStubPlugin("msteams");

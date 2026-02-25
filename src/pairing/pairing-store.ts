@@ -2,8 +2,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { ChannelId, ChannelPairingAdapter } from "../channels/plugins/types.js";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
+import type { ChannelId, ChannelPairingAdapter } from "../channels/plugins/types.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -376,9 +376,14 @@ type AllowFromStoreEntryUpdateParams = {
   env?: NodeJS.ProcessEnv;
 };
 
+type ChannelAllowFromStoreEntryMutation = (
+  current: string[],
+  normalized: string,
+) => string[] | null;
+
 async function updateChannelAllowFromStore(
   params: {
-    apply: (current: string[], normalized: string) => string[] | null;
+    apply: ChannelAllowFromStoreEntryMutation;
   } & AllowFromStoreEntryUpdateParams,
 ): Promise<{ changed: boolean; allowFrom: string[] }> {
   return await updateAllowFromStoreEntry({
@@ -390,38 +395,36 @@ async function updateChannelAllowFromStore(
   });
 }
 
-export async function addChannelAllowFromStoreEntry(params: {
-  channel: PairingChannel;
-  entry: string | number;
-  accountId?: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ changed: boolean; allowFrom: string[] }> {
+async function mutateChannelAllowFromStoreEntry(
+  params: AllowFromStoreEntryUpdateParams,
+  apply: ChannelAllowFromStoreEntryMutation,
+): Promise<{ changed: boolean; allowFrom: string[] }> {
   return await updateChannelAllowFromStore({
     ...params,
-    apply: (current, normalized) => {
-      if (current.includes(normalized)) {
-        return null;
-      }
-      return [...current, normalized];
-    },
+    apply,
   });
 }
 
-export async function removeChannelAllowFromStoreEntry(params: {
-  channel: PairingChannel;
-  entry: string | number;
-  accountId?: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ changed: boolean; allowFrom: string[] }> {
-  return await updateChannelAllowFromStore({
-    ...params,
-    apply: (current, normalized) => {
-      const next = current.filter((entry) => entry !== normalized);
-      if (next.length === current.length) {
-        return null;
-      }
-      return next;
-    },
+export async function addChannelAllowFromStoreEntry(
+  params: AllowFromStoreEntryUpdateParams,
+): Promise<{ changed: boolean; allowFrom: string[] }> {
+  return await mutateChannelAllowFromStoreEntry(params, (current, normalized) => {
+    if (current.includes(normalized)) {
+      return null;
+    }
+    return [...current, normalized];
+  });
+}
+
+export async function removeChannelAllowFromStoreEntry(
+  params: AllowFromStoreEntryUpdateParams,
+): Promise<{ changed: boolean; allowFrom: string[] }> {
+  return await mutateChannelAllowFromStoreEntry(params, (current, normalized) => {
+    const next = current.filter((entry) => entry !== normalized);
+    if (next.length === current.length) {
+      return null;
+    }
+    return next;
   });
 }
 

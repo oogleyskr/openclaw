@@ -1,7 +1,7 @@
-import type { CliDeps } from "../cli/deps.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
+import type { CliDeps } from "../cli/deps.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/delivery-info.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
@@ -76,13 +76,22 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
     sessionThreadId ??
     (origin?.threadId != null ? String(origin.threadId) : undefined);
 
+  // Slack uses replyToId (thread_ts) for threading, not threadId.
+  // The reply path does this mapping but deliverOutboundPayloads does not,
+  // so we must convert here to ensure post-restart notifications land in
+  // the originating Slack thread. See #17716.
+  const isSlack = channel === "slack";
+  const replyToId = isSlack && threadId != null && threadId !== "" ? String(threadId) : undefined;
+  const resolvedThreadId = isSlack ? undefined : threadId;
+
   try {
     await deliverOutboundPayloads({
       cfg,
       channel,
       to: resolved.to,
       accountId: origin?.accountId,
-      threadId,
+      replyToId,
+      threadId: resolvedThreadId,
       payloads: [{ text: message }],
       agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
       bestEffort: true,

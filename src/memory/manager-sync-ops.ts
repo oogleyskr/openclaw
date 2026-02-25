@@ -1,11 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
-import chokidar, { FSWatcher } from "chokidar";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SessionFileEntry } from "./session-files.js";
-import type { MemorySource, MemorySyncProgressUpdate } from "./types.js";
+import type { DatabaseSync } from "node:sqlite";
+import chokidar, { FSWatcher } from "chokidar";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { type OpenClawConfig } from "../config/config.js";
@@ -14,12 +12,14 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
 import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
 import { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "./embeddings-voyage.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
   type GeminiEmbeddingClient,
+  type MistralEmbeddingClient,
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
@@ -33,6 +33,7 @@ import {
 } from "./internal.js";
 import { type MemoryFileEntry } from "./internal.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
+import type { SessionFileEntry } from "./session-files.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
@@ -40,11 +41,13 @@ import {
 } from "./session-files.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 import { requireNodeSqlite } from "./sqlite.js";
+import type { MemorySource, MemorySyncProgressUpdate } from "./types.js";
 
 type MemoryIndexMeta = {
   model: string;
   provider: string;
   providerKey?: string;
+  sources?: MemorySource[];
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
@@ -88,10 +91,11 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
+  protected mistral?: MistralEmbeddingClient;
   protected abstract batch: {
     enabled: boolean;
     wait: boolean;
@@ -851,12 +855,14 @@ export abstract class MemoryManagerSyncOps {
     }
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
+    const configuredSources = this.resolveConfiguredSourcesForMeta();
     const needsFullReindex =
       params?.force ||
       !meta ||
       (this.provider && meta.model !== this.provider.model) ||
       (this.provider && meta.provider !== this.provider.id) ||
       meta.providerKey !== this.providerKey ||
+      this.metaSourcesDiffer(meta, configuredSources) ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
       (vectorReady && !meta?.vectorDims);
@@ -951,7 +957,7 @@ export abstract class MemoryManagerSyncOps {
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local" | "voyage";
+    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local" | "voyage" | "mistral";
 
     const fallbackModel =
       fallback === "gemini"
@@ -960,7 +966,9 @@ export abstract class MemoryManagerSyncOps {
           ? DEFAULT_OPENAI_EMBEDDING_MODEL
           : fallback === "voyage"
             ? DEFAULT_VOYAGE_EMBEDDING_MODEL
-            : this.settings.model;
+            : fallback === "mistral"
+              ? DEFAULT_MISTRAL_EMBEDDING_MODEL
+              : this.settings.model;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
@@ -978,6 +986,7 @@ export abstract class MemoryManagerSyncOps {
     this.openAi = fallbackResult.openAi;
     this.gemini = fallbackResult.gemini;
     this.voyage = fallbackResult.voyage;
+    this.mistral = fallbackResult.mistral;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });
@@ -1056,6 +1065,7 @@ export abstract class MemoryManagerSyncOps {
         model: this.provider?.model ?? "fts-only",
         provider: this.provider?.id ?? "none",
         providerKey: this.providerKey!,
+        sources: this.resolveConfiguredSourcesForMeta(),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
       };
@@ -1126,6 +1136,7 @@ export abstract class MemoryManagerSyncOps {
       model: this.provider?.model ?? "fts-only",
       provider: this.provider?.id ?? "none",
       providerKey: this.providerKey!,
+      sources: this.resolveConfiguredSourcesForMeta(),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
     };
@@ -1171,5 +1182,35 @@ export abstract class MemoryManagerSyncOps {
         `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
       )
       .run(META_KEY, value);
+  }
+
+  private resolveConfiguredSourcesForMeta(): MemorySource[] {
+    const normalized = Array.from(this.sources)
+      .filter((source): source is MemorySource => source === "memory" || source === "sessions")
+      .toSorted();
+    return normalized.length > 0 ? normalized : ["memory"];
+  }
+
+  private normalizeMetaSources(meta: MemoryIndexMeta): MemorySource[] {
+    if (!Array.isArray(meta.sources)) {
+      // Backward compatibility for older indexes that did not persist sources.
+      return ["memory"];
+    }
+    const normalized = Array.from(
+      new Set(
+        meta.sources.filter(
+          (source): source is MemorySource => source === "memory" || source === "sessions",
+        ),
+      ),
+    ).toSorted();
+    return normalized.length > 0 ? normalized : ["memory"];
+  }
+
+  private metaSourcesDiffer(meta: MemoryIndexMeta, configuredSources: MemorySource[]): boolean {
+    const metaSources = this.normalizeMetaSources(meta);
+    if (metaSources.length !== configuredSources.length) {
+      return true;
+    }
+    return metaSources.some((source, index) => source !== configuredSources[index]);
   }
 }

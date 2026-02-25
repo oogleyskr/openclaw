@@ -1,14 +1,14 @@
 import { html, nothing } from "lit";
-import type { AppViewState } from "./app-view-state.ts";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
+import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents } from "./controllers/agents.ts";
+import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -21,11 +21,21 @@ import {
 } from "./controllers/config.ts";
 import {
   loadCronRuns,
+  loadMoreCronJobs,
+  loadMoreCronRuns,
+  reloadCronJobs,
   toggleCronJob,
   runCronJob,
   removeCronJob,
   addCronJob,
+  startCronEdit,
+  startCronClone,
+  cancelCronEdit,
+  validateCronForm,
+  hasCronFormErrors,
   normalizeCronFormState,
+  updateCronJobsFilter,
+  updateCronRunsFilter,
 } from "./controllers/cron.ts";
 import { loadDebug, callDebugMethod } from "./controllers/debug.ts";
 import {
@@ -41,7 +51,6 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
-import { loadHardware } from "./controllers/hardware.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
@@ -53,8 +62,9 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
-import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -63,7 +73,6 @@ import { renderCron } from "./views/cron.ts";
 import { renderDebug } from "./views/debug.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
-import { renderHardware } from "./views/hardware.ts";
 import { renderInstances } from "./views/instances.ts";
 import { renderLogs } from "./views/logs.ts";
 import { renderNodes } from "./views/nodes.ts";
@@ -73,6 +82,43 @@ import { renderSkills } from "./views/skills.ts";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
+const CRON_THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
+const CRON_TIMEZONE_SUGGESTIONS = [
+  "UTC",
+  "America/Los_Angeles",
+  "America/Denver",
+  "America/Chicago",
+  "America/New_York",
+  "Europe/London",
+  "Europe/Berlin",
+  "Asia/Tokyo",
+];
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+function normalizeSuggestionValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function uniquePreserveOrder(values: string[]): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized) {
+      continue;
+    }
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push(normalized);
+  }
+  return output;
+}
 
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
@@ -91,6 +137,16 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 }
 
 export function renderApp(state: AppViewState) {
+  const openClawVersion =
+    (typeof state.hello?.server?.version === "string" && state.hello.server.version.trim()) ||
+    state.updateAvailable?.currentVersion ||
+    t("common.na");
+  const availableUpdate =
+    state.updateAvailable &&
+    state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion
+      ? state.updateAvailable
+      : null;
+  const versionStatusClass = availableUpdate ? "warn" : "ok";
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
@@ -102,11 +158,62 @@ export function renderApp(state: AppViewState) {
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const basePath = normalizeBasePath(state.basePath ?? "");
   const resolvedAgentId =
     state.agentsSelectedId ??
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+  const cronAgentSuggestions = Array.from(
+    new Set(
+      [
+        ...(state.agentsList?.agents?.map((entry) => entry.id.trim()) ?? []),
+        ...state.cronJobs
+          .map((job) => (typeof job.agentId === "string" ? job.agentId.trim() : ""))
+          .filter(Boolean),
+      ].filter(Boolean),
+    ),
+  ).toSorted((a, b) => a.localeCompare(b));
+  const cronModelSuggestions = Array.from(
+    new Set(
+      [
+        ...state.cronModelSuggestions,
+        ...state.cronJobs
+          .map((job) => {
+            if (job.payload.kind !== "agentTurn" || typeof job.payload.model !== "string") {
+              return "";
+            }
+            return job.payload.model.trim();
+          })
+          .filter(Boolean),
+      ].filter(Boolean),
+    ),
+  ).toSorted((a, b) => a.localeCompare(b));
+  const selectedDeliveryChannel =
+    state.cronForm.deliveryChannel && state.cronForm.deliveryChannel.trim()
+      ? state.cronForm.deliveryChannel.trim()
+      : "last";
+  const jobToSuggestions = state.cronJobs
+    .map((job) => normalizeSuggestionValue(job.delivery?.to))
+    .filter(Boolean);
+  const accountToSuggestions = (
+    selectedDeliveryChannel === "last"
+      ? Object.values(state.channelsSnapshot?.channelAccounts ?? {}).flat()
+      : (state.channelsSnapshot?.channelAccounts?.[selectedDeliveryChannel] ?? [])
+  )
+    .flatMap((account) => [
+      normalizeSuggestionValue(account.accountId),
+      normalizeSuggestionValue(account.name),
+    ])
+    .filter(Boolean);
+  const rawDeliveryToSuggestions = uniquePreserveOrder([
+    ...jobToSuggestions,
+    ...accountToSuggestions,
+  ]);
+  const deliveryToSuggestions =
+    state.cronForm.deliveryMode === "webhook"
+      ? rawDeliveryToSuggestions.filter((value) => isHttpUrl(value))
+      : rawDeliveryToSuggestions;
 
   return html`
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
@@ -125,13 +232,21 @@ export function renderApp(state: AppViewState) {
             <span class="nav-collapse-toggle__icon">${icons.menu}</span>
           </button>
           <div class="brand">
+            <div class="brand-logo">
+              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
+            </div>
             <div class="brand-text">
-              <div class="brand-title">BILLBOT</div>
-              <div class="brand-sub">DASHBOARD</div>
+              <div class="brand-title">OPENCLAW</div>
+              <div class="brand-sub">Gateway Dashboard</div>
             </div>
           </div>
         </div>
         <div class="topbar-status">
+          <div class="pill">
+            <span class="statusDot ${versionStatusClass}"></span>
+            <span>${t("common.version")}</span>
+            <span class="mono">${openClawVersion}</span>
+          </div>
           <div class="pill">
             <span class="statusDot ${state.connected ? "ok" : ""}"></span>
             <span>${t("common.health")}</span>
@@ -174,9 +289,9 @@ export function renderApp(state: AppViewState) {
           <div class="nav-group__items">
             <a
               class="nav-item nav-item--external"
-              href="https://docs.billbot.app"
-              target="_blank"
-              rel="noreferrer"
+              href="https://docs.openclaw.ai"
+              target=${EXTERNAL_LINK_TARGET}
+              rel=${buildExternalLinkRel()}
               title="${t("common.docs")} (opens in new tab)"
             >
               <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
@@ -187,10 +302,10 @@ export function renderApp(state: AppViewState) {
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
         ${
-          state.updateAvailable
+          availableUpdate
             ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${state.updateAvailable.latestVersion}
-              (running v${state.updateAvailable.currentVersion}).
+              <strong>Update available:</strong> v${availableUpdate.latestVersion}
+              (running v${availableUpdate.currentVersion}).
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
@@ -218,6 +333,7 @@ export function renderApp(state: AppViewState) {
                 settings: state.settings,
                 password: state.password,
                 lastError: state.lastError,
+                lastErrorCode: state.lastErrorCode,
                 presenceCount,
                 sessionsCount,
                 cronEnabled: state.cronStatus?.enabled ?? null,
@@ -324,11 +440,21 @@ export function renderApp(state: AppViewState) {
             ? renderCron({
                 basePath: state.basePath,
                 loading: state.cronLoading,
+                jobsLoadingMore: state.cronJobsLoadingMore,
                 status: state.cronStatus,
                 jobs: state.cronJobs,
+                jobsTotal: state.cronJobsTotal,
+                jobsHasMore: state.cronJobsHasMore,
+                jobsQuery: state.cronJobsQuery,
+                jobsEnabledFilter: state.cronJobsEnabledFilter,
+                jobsSortBy: state.cronJobsSortBy,
+                jobsSortDir: state.cronJobsSortDir,
                 error: state.cronError,
                 busy: state.cronBusy,
                 form: state.cronForm,
+                fieldErrors: state.cronFieldErrors,
+                canSubmit: !hasCronFormErrors(state.cronFieldErrors),
+                editingJobId: state.cronEditingJobId,
                 channels: state.channelsSnapshot?.channelMeta?.length
                   ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
                   : (state.channelsSnapshot?.channelOrder ?? []),
@@ -336,26 +462,50 @@ export function renderApp(state: AppViewState) {
                 channelMeta: state.channelsSnapshot?.channelMeta ?? [],
                 runsJobId: state.cronRunsJobId,
                 runs: state.cronRuns,
-                onFormChange: (patch) =>
-                  (state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch })),
+                runsTotal: state.cronRunsTotal,
+                runsHasMore: state.cronRunsHasMore,
+                runsLoadingMore: state.cronRunsLoadingMore,
+                runsScope: state.cronRunsScope,
+                runsStatuses: state.cronRunsStatuses,
+                runsDeliveryStatuses: state.cronRunsDeliveryStatuses,
+                runsStatusFilter: state.cronRunsStatusFilter,
+                runsQuery: state.cronRunsQuery,
+                runsSortDir: state.cronRunsSortDir,
+                agentSuggestions: cronAgentSuggestions,
+                modelSuggestions: cronModelSuggestions,
+                thinkingSuggestions: CRON_THINKING_SUGGESTIONS,
+                timezoneSuggestions: CRON_TIMEZONE_SUGGESTIONS,
+                deliveryToSuggestions,
+                onFormChange: (patch) => {
+                  state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch });
+                  state.cronFieldErrors = validateCronForm(state.cronForm);
+                },
                 onRefresh: () => state.loadCron(),
                 onAdd: () => addCronJob(state),
+                onEdit: (job) => startCronEdit(state, job),
+                onClone: (job) => startCronClone(state, job),
+                onCancelEdit: () => cancelCronEdit(state),
                 onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
                 onRun: (job) => runCronJob(state, job),
                 onRemove: (job) => removeCronJob(state, job),
-                onLoadRuns: (jobId) => loadCronRuns(state, jobId),
-              })
-            : nothing
-        }
-
-        ${
-          state.tab === "hardware"
-            ? renderHardware({
-                loading: state.hardwareLoading,
-                infra: state.hardwareInfra,
-                health: state.hardwareHealth,
-                error: state.hardwareError,
-                onRefresh: () => loadHardware(state),
+                onLoadRuns: async (jobId) => {
+                  updateCronRunsFilter(state, { cronRunsScope: "job" });
+                  await loadCronRuns(state, jobId);
+                },
+                onLoadMoreJobs: () => loadMoreCronJobs(state),
+                onJobsFiltersChange: async (patch) => {
+                  updateCronJobsFilter(state, patch);
+                  await reloadCronJobs(state);
+                },
+                onLoadMoreRuns: () => loadMoreCronRuns(state),
+                onRunsFiltersChange: async (patch) => {
+                  updateCronRunsFilter(state, patch);
+                  if (state.cronRunsScope === "all") {
+                    await loadCronRuns(state, null);
+                    return;
+                  }
+                  await loadCronRuns(state, state.cronRunsJobId);
+                },
               })
             : nothing
         }
@@ -394,9 +544,18 @@ export function renderApp(state: AppViewState) {
                 agentSkillsReport: state.agentSkillsReport,
                 agentSkillsError: state.agentSkillsError,
                 agentSkillsAgentId: state.agentSkillsAgentId,
+                toolsCatalogLoading: state.toolsCatalogLoading,
+                toolsCatalogError: state.toolsCatalogError,
+                toolsCatalogResult: state.toolsCatalogResult,
                 skillsFilter: state.skillsFilter,
                 onRefresh: async () => {
                   await loadAgents(state);
+                  const nextSelected =
+                    state.agentsSelectedId ??
+                    state.agentsList?.defaultId ??
+                    state.agentsList?.agents?.[0]?.id ??
+                    null;
+                  await loadToolsCatalog(state, nextSelected);
                   const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
                   if (agentIds.length > 0) {
                     void loadAgentIdentities(state, agentIds);
@@ -417,6 +576,9 @@ export function renderApp(state: AppViewState) {
                   state.agentSkillsError = null;
                   state.agentSkillsAgentId = null;
                   void loadAgentIdentity(state, agentId);
+                  if (state.agentsPanel === "tools") {
+                    void loadToolsCatalog(state, agentId);
+                  }
                   if (state.agentsPanel === "files") {
                     void loadAgentFiles(state, agentId);
                   }
@@ -435,6 +597,9 @@ export function renderApp(state: AppViewState) {
                       state.agentFileDrafts = {};
                       void loadAgentFiles(state, resolvedAgentId);
                     }
+                  }
+                  if (panel === "tools") {
+                    void loadToolsCatalog(state, resolvedAgentId);
                   }
                   if (panel === "skills") {
                     if (resolvedAgentId) {

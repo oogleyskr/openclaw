@@ -1,11 +1,4 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import type {
-  SandboxBrowserConfig,
-  SandboxConfig,
-  SandboxDockerConfig,
-  SandboxPruneConfig,
-  SandboxScope,
-} from "./types.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
@@ -23,6 +16,33 @@ import {
   DEFAULT_SANDBOX_WORKSPACE_ROOT,
 } from "./constants.js";
 import { resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
+import type {
+  SandboxBrowserConfig,
+  SandboxConfig,
+  SandboxDockerConfig,
+  SandboxPruneConfig,
+  SandboxScope,
+} from "./types.js";
+
+export const DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS = [
+  "dangerouslyAllowReservedContainerTargets",
+  "dangerouslyAllowExternalBindSources",
+  "dangerouslyAllowContainerNamespaceJoin",
+] as const;
+
+type DangerousSandboxDockerBooleanKey = (typeof DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS)[number];
+type DangerousSandboxDockerBooleans = Pick<SandboxDockerConfig, DangerousSandboxDockerBooleanKey>;
+
+function resolveDangerousSandboxDockerBooleans(
+  agentDocker?: Partial<SandboxDockerConfig>,
+  globalDocker?: Partial<SandboxDockerConfig>,
+): DangerousSandboxDockerBooleans {
+  const resolved = {} as DangerousSandboxDockerBooleans;
+  for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
+    resolved[key] = agentDocker?.[key] ?? globalDocker?.[key];
+  }
+  return resolved;
+}
 
 export function resolveSandboxBrowserDockerCreateConfig(params: {
   docker: SandboxDockerConfig;
@@ -95,6 +115,7 @@ export function resolveSandboxDockerConfig(params: {
     dns: agentDocker?.dns ?? globalDocker?.dns,
     extraHosts: agentDocker?.extraHosts ?? globalDocker?.extraHosts,
     binds: binds.length ? binds : undefined,
+    ...resolveDangerousSandboxDockerBooleans(agentDocker, globalDocker),
   };
 }
 

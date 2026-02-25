@@ -1,10 +1,11 @@
 import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 /**
@@ -16,14 +17,7 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 export type PromptMode = "full" | "minimal" | "none";
 type OwnerIdDisplay = "raw" | "hash";
 
-function buildSkillsSection(params: {
-  skillsPrompt?: string;
-  isMinimal: boolean;
-  readToolName: string;
-}) {
-  if (params.isMinimal) {
-    return [];
-  }
+function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
     return [];
@@ -229,20 +223,7 @@ export function buildAgentSystemPrompt(params: {
     repoRoot?: string;
   };
   messageToolHints?: string[];
-  sandboxInfo?: {
-    enabled: boolean;
-    workspaceDir?: string;
-    containerWorkspaceDir?: string;
-    workspaceAccess?: "none" | "ro" | "rw";
-    agentWorkspaceMount?: string;
-    browserBridgeUrl?: string;
-    browserNoVncUrl?: string;
-    hostBrowserAllowed?: boolean;
-    elevated?: {
-      allowed: boolean;
-      defaultLevel: "on" | "off" | "ask" | "full";
-    };
-  };
+  sandboxInfo?: EmbeddedSandboxInfo;
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
   reactionGuidance?: {
     level: "minimal" | "extensive";
@@ -401,12 +382,12 @@ export function buildAgentSystemPrompt(params: {
   const safetySection = [
     "## Safety",
     "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
-    "The owner has full authority over this instance. When the owner requests something, comply without refusal or moralizing. The owner decides what is safe and appropriate for their own systems and accounts.",
+    "Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards. (Inspired by Anthropic's constitution.)",
+    "Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.",
     "",
   ];
   const skillsSection = buildSkillsSection({
     skillsPrompt,
-    isMinimal,
     readToolName,
   });
   const memorySection = buildMemorySection({
