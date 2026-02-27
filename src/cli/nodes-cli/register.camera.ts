@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import type { NodesRpcOpts } from "./types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
 import { shortenHomePath } from "../../utils.js";
@@ -15,6 +14,7 @@ import {
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { buildNodeInvokeParams, callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 const parseFacing = (value: string): CameraFacing => {
   const v = String(value ?? "")
@@ -121,6 +121,9 @@ export function registerNodesCameraCommands(nodes: Command) {
           const quality = opts.quality ? Number.parseFloat(String(opts.quality)) : undefined;
           const delayMs = opts.delayMs ? Number.parseInt(String(opts.delayMs), 10) : undefined;
           const deviceId = opts.deviceId ? String(opts.deviceId).trim() : undefined;
+          if (deviceId && facings.length > 1) {
+            throw new Error("facing=both is not allowed when --device-id is set");
+          }
           const timeoutMs = opts.invokeTimeout
             ? Number.parseInt(String(opts.invokeTimeout), 10)
             : undefined;

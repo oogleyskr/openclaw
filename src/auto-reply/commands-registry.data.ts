@@ -1,11 +1,11 @@
+import { listChannelDocks } from "../channels/dock.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
   CommandCategory,
   CommandScope,
 } from "./commands-registry.types.js";
-import { listChannelDocks } from "../channels/dock.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import { listThinkingLevels } from "./thinking.js";
 
 type DefineChatCommandInput = {
@@ -305,6 +305,45 @@ function buildChatCommands(): ChatCommandDefinition[] {
         {
           name: "value",
           description: "Additional input (limit/message)",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
+      key: "acp",
+      nativeName: "acp",
+      description: "Manage ACP sessions and runtime options.",
+      textAlias: "/acp",
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "Action to run",
+          type: "string",
+          choices: [
+            "spawn",
+            "cancel",
+            "steer",
+            "close",
+            "sessions",
+            "status",
+            "set-mode",
+            "set",
+            "cwd",
+            "permissions",
+            "timeout",
+            "model",
+            "reset-options",
+            "doctor",
+            "install",
+            "help",
+          ],
+        },
+        {
+          name: "value",
+          description: "Action arguments",
           type: "string",
           captureRemaining: true,
         },

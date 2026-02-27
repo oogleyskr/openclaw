@@ -1,5 +1,4 @@
 import { createRequire } from "node:module";
-import type { PluginRuntime } from "./types.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { createMemoryGetTool, createMemorySearchTool } from "../../agents/tools/memory-tool.js";
 import { handleSlackAction } from "../../agents/tools/slack-actions.js";
@@ -18,6 +17,7 @@ import {
   shouldComputeCommandAuthorized,
 } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
+import { withReplyDispatcher } from "../../auto-reply/dispatch.js";
 import {
   formatAgentEnvelope,
   formatInboundEnvelope,
@@ -139,6 +139,7 @@ import {
 } from "../../web/auth-store.js";
 import { loadWebMedia } from "../../web/media.js";
 import { formatNativeDependencyHint } from "./native-deps.js";
+import type { PluginRuntime } from "./types.js";
 
 let cachedVersion: string | null = null;
 
@@ -304,6 +305,7 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
       dispatchReplyFromConfig,
+      withReplyDispatcher,
       finalizeInboundContext,
       formatAgentEnvelope,
       /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
@@ -315,8 +317,17 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     pairing: {
       buildPairingReply,
-      readAllowFromStore: readChannelAllowFromStore,
-      upsertPairingRequest: upsertChannelPairingRequest,
+      readAllowFromStore: ({ channel, accountId, env }) =>
+        readChannelAllowFromStore(channel, env, accountId),
+      upsertPairingRequest: ({ channel, id, accountId, meta, env, pairingAdapter }) =>
+        upsertChannelPairingRequest({
+          channel,
+          id,
+          accountId,
+          meta,
+          env,
+          pairingAdapter,
+        }),
     },
     media: {
       fetchRemoteMedia,
